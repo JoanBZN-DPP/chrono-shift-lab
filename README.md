@@ -2,32 +2,34 @@
 
 [Jugar](https://joanbzn-dpp.github.io/chrono-shift-lab/) · [Código público](https://github.com/JoanBZN-DPP/chrono-shift-lab)
 
-Juego de puzles temporales con 30 niveles, clones, portales, cintas, puntuación por nivel, lobby/código, ranking y panel de administrador. Se conserva el botón **Cerrar paneles**.
+Juego de puzles temporales con 30 niveles, clones, portales, cintas, puntuación por nivel, lobby con código, ranking y panel de administrador. Se conserva el botón **Cerrar paneles**.
 
-## Estado de Firebase
+## Estado publicado
 
-**La conexión real está pendiente.** `firebase-config.js` contiene `null`: la práctica y el modo PeerJS funcionan, pero P2P no conserva las partidas al desconectarse el anfitrión. Publicar el sitio en GitHub Pages no crea por sí solo una base de datos.
+El juego está desplegado en GitHub Pages y conectado a un proyecto real de Firebase Realtime Database en `us-central1`. La configuración pública está en `firebase-config.js`; una configuración web pública no es una clave privada.
 
-El cliente de Firebase RTDB, la autenticación, el guardado de progreso y las reglas están preparados y tienen pruebas locales. No se ha verificado una conexión con un proyecto real.
+Está habilitado el acceso anónimo y Google Authentication, y el dominio de GitHub Pages está autorizado. Las reglas publicadas de `firebase.rules.json` no dejan la raíz abierta. La persistencia real conserva las salas, jugadores, puntuaciones y snapshots descritos más abajo.
 
-## Activar la persistencia
+## Uso
 
-1. En [Firebase Console](https://console.firebase.google.com/), crea un proyecto, registra una aplicación web y crea una **Realtime Database** en modo bloqueado. No se necesitan claves privadas en este repositorio.
-2. En **Authentication**, activa los proveedores **Anonymous** y **Google**. Añade `joanbzn-dpp.github.io` a los dominios autorizados.
-3. Copia la configuración pública de la aplicación web a `firebase-config.js`, sustituyendo `null` por el objeto `firebaseConfig`. Debe incluir `apiKey`, `authDomain`, `projectId`, `appId` y la `databaseURL` de RTDB.
-4. Publica el contenido de `firebase.rules.json` en las reglas de Realtime Database. No abras la raíz con `read: true` o `write: true`.
-5. Abre el juego, entra con Google y pulsa **Panel Admin**. Copia el UID que aparece y crea el dato `/admins/EL_UID: true` desde Firebase Console, nunca desde un cliente del juego. Recarga el juego. La contraseña local del panel queda como segundo bloqueo de ese navegador.
-6. Crea una partida y comprueba desde otro equipo que aparece usando el mismo enlace y código. Para continuar como el mismo jugador, usa la misma cuenta Google.
+1. Entra con Google **antes de jugar** para recuperar el mismo UID y progreso si continúas desde otro computador.
+2. En **Partidas / Unirme**, escribe un apodo y el código que comparte el administrador. Todos los jugadores deben entrar en la misma partida; el reloj sincronizado es el del servidor y continúa aunque cierres el juego.
+3. Para administrar, usa la misma cuenta Google autorizada, abre **Panel Admin** y configura en cada navegador un bloqueo local de al menos 8 caracteres. Si el navegador ya tiene una contraseña configurada, usa esa contraseña. Al crear una partida desde el panel, comparte el código y pulsa **Iniciar** desde el panel.
+4. Un invitado anónimo solo tiene identidad en ese navegador. Vincularlo a una cuenta Google nueva para Firebase conserva su UID; si la cuenta Google ya tenía un historial, se recupera ese historial sin fusionar ambos automáticamente.
 
-Los invitados anónimos conservan su identidad solo en ese navegador. Vincular un invitado a una cuenta Google nueva para Firebase conserva su UID; si esa cuenta Google ya existe, se recupera su progreso existente y no se fusionan automáticamente los dos historiales.
+La práctica local no implica guardado en la nube.
 
 ## Datos y seguridad
 
-`match/state` conserva partida, código, parámetros y tiempos. `players/{uid}` conserva puntuación y un snapshot JSON del nivel, movimientos, clones, posiciones, bloques, bucle y tiempo empleado. El guardado se agrupa durante la partida; los arrays vacíos se conservan dentro de JSON.
+Existe una sola sala activa global en `match/state`. `players/{uid}` mantiene un único registro por UID con puntuación y niveles superados; no se conserva un archivo histórico de partidas. El snapshot JSON conserva nivel, movimientos, clones, posiciones, bloques, bucle y tiempo empleado. Los arrays vacíos también se conservan dentro del JSON.
 
-Solo un UID autorizado en `/admins` puede gestionar la partida. Cada jugador solo puede escribir su propio registro; los usuarios autenticados pueden leer el ranking. Las puntuaciones se calculan en el cliente: este juego no ofrece protección antifraude de competición.
+Solo un UID autorizado en `/admins` puede gestionar la partida. Cada jugador solo puede escribir su propio registro y los usuarios autenticados pueden leer el ranking. El código de acceso no sustituye a las reglas de seguridad. Las puntuaciones se calculan en el cliente, por lo que no hay protección antifraude de competición.
 
-## Pruebas
+## Verificación realizada
+
+En el sitio publicado se comprobó la conexión real a Firebase, el acceso Google y el rol administrador, la creación e inicio de una partida y el ingreso por código desde otra pestaña. Después de mover y crear un clon, recargar y reingresar recuperó un clon en el bucle 2. Completar el primer nivel produjo 931 puntos, visibles en tiempo real en la pestaña de administración.
+
+Estas comprobaciones se hicieron con pestañas y recargas del navegador, no con dos computadores físicos. También pasaron las pruebas de sintaxis/configuración, comportamiento y reglas en el emulador RTDB:
 
 ```sh
 node tests/smoke.test.js
@@ -35,6 +37,6 @@ node tests/behavior.test.js
 npx firebase-tools@13.35.1 emulators:exec --only database --project demo-chrono-shift 'node tests/rtdb-emulator.test.js'
 ```
 
-La última orden usa Java y un emulador local, no un proyecto Firebase real. `firebase.json` también permite desplegar solo las reglas con Firebase CLI una vez autorizado el proyecto correcto.
+La última orden usa Java y un emulador local, no el proyecto Firebase real. `firebase.json` también permite desplegar solo las reglas con Firebase CLI una vez autorizado el proyecto correcto.
 
 La dependencia PeerJS conserva su aviso MIT en `THIRD_PARTY_NOTICES.md`; ese aviso no cambia la licencia del código original del juego.
