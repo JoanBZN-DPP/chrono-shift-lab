@@ -14,13 +14,11 @@ class TestDate extends Date { static now() { return clock; } }
 let timerId = 0;
 const timers = new Map();
 const values = new Map();
-const sessionValues = new Map();
 let reloads = 0;
 const context = {
   console, Date: TestDate, Math, JSON, TextEncoder, crypto: require('node:crypto').webcrypto,
   document: {getElementById: node},
   localStorage: {getItem: k => values.get(k) || null, setItem: (k,v) => values.set(k,v)},
-  sessionStorage: {getItem: k => sessionValues.get(k) || null, setItem: (k,v) => sessionValues.set(k,v), removeItem: k => sessionValues.delete(k)},
   addEventListener() {}, requestAnimationFrame() {}, setInterval() {},
   setTimeout: (f,ms) => {const id = ++timerId; timers.set(id, {f,ms}); return id;},
   clearTimeout: id => timers.delete(id),
@@ -43,7 +41,7 @@ assert.equal(run('phase()'), 'count');
 clock = 102000; assert.equal(run('phase()'), 'run');
 clock = 108000; assert.equal(run('phase()'), 'over');
 
-// Se ejecutan las funciones reales, no copias de sus implementaciones.
+// Execute the actual game functions, not copies of their implementations.
 run('MT=null; MP.run=false; MP.over=false; load(0); step("R"); newLoop(true); step("D")');
 const snapshot = plain('progressSnapshot()');
 context.saved = JSON.stringify(snapshot);
@@ -58,111 +56,80 @@ assert.deepEqual(plain('recs'), []);
 
 (async () => {
   const writes = [];
-  let remote = {name: 'Joan', matchId: 'm1', solved: 2, score: 900, t: 1, progress: JSON.stringify(snapshot)};
-  context.mockDb = {ref: () => ({once: async () => ({val: () => remote}), update: async value => {writes.push(value);}})};
-  node('nick').value = 'Joan'; node('joinCode').value = 'A7K2Q9';
+  let remote = {name:'Joan',matchId:'m1',solved:2,score:900,t:1,progress:JSON.stringify(snapshot)};
+  context.mockDb = {ref: () => ({once:async()=>({val:()=>remote}),update:async value=>{writes.push(value);}})};
+  node('nick').value='Joan';node('joinCode').value='A7K2Q9';
   run('db=mockDb; MP.id="p1"; MP.joined=false; MP.run=false; MP.seen=""; MP.solved=0; MT={id:"m1",code:"A7K2Q9",startAt:null,endAt:null,ban:[]}; PL=[]');
   await run('join()');
-  assert.equal(writes.length, 0, 'unirse de nuevo no puede sobrescribir el snapshot remoto');
-  assert.equal(run('MP.score'), 900);
-  assert.equal(run('MP.solved'), 2);
+  assert.equal(writes.length,0,'rejoining cannot overwrite the remote snapshot');
+  assert.equal(run('MP.score'),900);assert.equal(run('MP.solved'),2);
   run('startRun()');
-  assert.deepEqual(plain('P'), snapshot.position);
-  assert.equal(run('t'), snapshot.t);
-  assert.equal(run('MP.score'), 900);
+  assert.deepEqual(plain('P'),snapshot.position);assert.equal(run('t'),snapshot.t);assert.equal(run('MP.score'),900);
   await run('savePlayer()');
-  assert.equal(typeof writes.at(-1).progress, 'string', 'JSON conserva también los arrays vacíos en RTDB');
-  assert.deepEqual(JSON.parse(writes.at(-1).progress).clonePositions, snapshot.clonePositions);
+  assert.equal(typeof writes.at(-1).progress,'string','JSON also preserves empty arrays in RTDB');
+  assert.deepEqual(JSON.parse(writes.at(-1).progress).clonePositions,snapshot.clonePositions);
 
   run('PL=[]; MP.solved=2; MP.score=900; load(2); MP.lvT=serverNow(); win()');
-  const score = run('MP.score');
-  assert.equal(run('MP.solved'), 3);
-  run('win()');
-  assert.equal(run('MP.score'), score, 'un nivel no puede puntuar dos veces');
-  context.completed = JSON.stringify({...snapshot, level: 2, state: 'win'});
+  const score=run('MP.score');assert.equal(run('MP.solved'),3);
+  run('win()');assert.equal(run('MP.score'),score,'a level cannot score twice');
+  context.completed=JSON.stringify({...snapshot,level:2,state:'win'});
   run('MP.pendingProgress=completed; startRun()');
-  assert.equal(run('li'), 3, 'una victoria ya puntuada continúa en el siguiente nivel');
-  assert.equal(run('state'), 'play');
+  assert.equal(run('li'),3,'an already-scored victory continues to the next level');assert.equal(run('state'),'play');
 
-  // Un jugador nuevo no hereda el nivel que estuviese practicando antes de entrar.
-  writes.length = 0; remote = null;
+  writes.length=0;remote=null;
   run('MP.run=false; MP.joined=false; MP.solved=0; MP.score=0; MP.seen=""; MT.startAt=null; load(20)');
-  await run('join()');
-  assert.equal(writes.length, 1);
-  assert.equal('progress' in writes[0], false);
-  run('PL=[]; startRun()');
-  assert.equal(run('li'), 0);
-
+  await run('join()');assert.equal(writes.length,1);assert.equal('progress' in writes[0],false);
+  run('PL=[]; startRun()');assert.equal(run('li'),0,'a new player does not inherit their practice level');
   run('db=null; window.CHRONO_FIREBASE_CONFIG={}; MP.run=false');
-  await run('join()');
-  assert.match(run('MP.err'), /Firebase no está conectado/);
+  await run('join()');assert.match(run('MP.err'),/sincronizando/i);
 
-  run('firebaseReady=false; MP.host=false; adminGate()');
-  assert.match(node('ov').innerHTML, /Conectando con Firebase/, 'early admin click shows a clear loading state');
-  run('firebaseReady=true;');
+  // Cloud play never falls back to peer hosting or joins before player sync.
+  let peerCalls=0;
+  context.peerJoinProbe=async()=>{peerCalls++};
+  context.peerHostProbe=async()=>{peerCalls++;return Promise.resolve()};
+  run('db={ref:()=>({once:async()=>({val:()=>null}),update:async()=>{}})};usr=null;networkState.ready=false;MT={id:"cloud-room",code:"ZC3V29",startAt:null,endAt:null,ban:[]};MP.host=false;MP.joined=false;p2pGuestJoin=peerJoinProbe');
+  node('nick').value='Cloud test';node('joinCode').value='ZC3V29';
+  await run('join()');assert.equal(peerCalls,0);assert.match(run('MP.err'),/sincronizando/i);
+  run('networkState.error="Fallo de red";renderNetworkStatus()');
+  assert.equal(node('netRetry').style.display,'');
+  context.peerHostOriginal=run('p2pHostStart');
+  run('MP.host=true;MP.adminUnlocked=true;MP.firebaseAdmin=true;adminDb={ref:()=>({set:async()=>{throw new Error("permission denied")}})};networkState.error="";db=null;p2pHostStart=peerHostProbe');
+  await run('newMatch()');
+  assert.equal(peerCalls,0,'Firebase mode must not start a P2P room');
+  assert.match(run('MP.err'),/permission denied/,'failed cloud write stays visible instead of being cleared');
+  run('p2pHostStart=peerHostOriginal');
 
-  const adminPassword = process.env.CHRONO_ADMIN_TEST_PASSWORD || 'local-test-password';
-  const salt = 'auth-flow-test-salt';
-  values.set('chrono-admin-credential-v1', salt + ':' + await run(`hashAdmin(${JSON.stringify(adminPassword)}, ${JSON.stringify(salt)})`));
-  const authCalls = [];
-  const anonymousUser = {
-    isAnonymous: true,
-    linkWithPopup: async () => {authCalls.push('linkWithPopup'); throw {code: 'auth/popup-blocked'};},
-    linkWithRedirect: async () => {authCalls.push('linkWithRedirect');}
-  };
-  let authMock = {currentUser: anonymousUser};
-  const authFactory = () => authMock;
-  authFactory.GoogleAuthProvider = function GoogleAuthProvider() {};
-  context.firebase.auth = authFactory;
-  run('firebaseApp={}');
-  node('ov').innerHTML = '<h2>Administración no autorizada</h2>';
-  await run('signInGoogle()');
-  assert.deepEqual(authCalls, ['linkWithPopup', 'linkWithRedirect'], 'blocked anonymous-user popup falls back to Google redirect');
-  assert.equal(sessionValues.get('chrono-admin-open-after-auth-v1'), '1', 'admin intent survives the redirect');
-  assert.equal(reloads, 0, 'redirect is not interrupted by a forced page reload');
+  run('firebaseReady=false; MP.host=false; MP.firebaseAdmin=false; MP.adminUnlocked=false; MP.err=""; adminGate()');
+  assert.match(node('ov').innerHTML,/contraseña compartida/,'admin form is reachable before player connection finishes');
+  assert.doesNotMatch(node('ov').innerHTML,/Conectando con Firebase|cuenta Google|Configurar administrador/);
 
-  run('MP.host=true; MP.firebaseAdmin=true; MP.adminUnlocked=false; MP.err=""; usr={uid:"admin-test"}; db={}; MT=null; PL=[]; resumeAdminAfterAuth()');
-  assert.match(node('ov').innerHTML, /Acceso de administrador/, 'returning admin sees the local password gate');
-  node('adminPass').value = adminPassword;
-  await run('adminLogin()');
-  assert.equal(run('MP.adminUnlocked'), true, 'configured admin password unlocks the panel after Firebase authorization');
-  assert.match(node('ov').innerHTML, /Panel de administración/);
-  assert.equal(sessionValues.has('chrono-admin-open-after-auth-v1'), false, 'admin return marker is consumed once');
+  const authCalls=[];
+  let authMock;
+  const authFactory=()=>authMock;authFactory.GoogleAuthProvider=function(){};context.firebase.auth=authFactory;
+  const installAuth=mock=>{authMock=mock;context.authMock=mock;run('playerAuth=authMock; usr=authMock.currentUser; MP.err=""')};
+  const anonymous={uid:'anon-uid',isAnonymous:true};
+  anonymous.linkWithPopup=async()=>{authCalls.push('linkWithPopup');throw {code:'auth/popup-blocked'}};
+  anonymous.linkWithRedirect=async()=>{authCalls.push('linkWithRedirect')};
+  installAuth({currentUser:anonymous});
+  const beforeRedirect=reloads;await run('signInGoogle()');
+  assert.deepEqual(authCalls,['linkWithPopup','linkWithRedirect'],'blocked linking uses one redirect and no second sign-in');
+  assert.equal(reloads,beforeRedirect,'redirect is not interrupted by reload');
 
-  authCalls.length = 0;
-  authMock = {
-    currentUser: {isAnonymous: false},
-    signInWithPopup: async () => {authCalls.push('signInWithPopup'); throw {code: 'auth/popup-blocked'};},
-    signInWithRedirect: async () => {authCalls.push('signInWithRedirect');}
-  };
-  await run('signInGoogle()');
-  assert.deepEqual(authCalls, ['signInWithPopup', 'signInWithRedirect'], 'blocked Google sign-in popup falls back to redirect');
+  authCalls.length=0;
+  anonymous.linkWithPopup=async()=>{authCalls.push('linkWithPopup');authMock.currentUser={uid:'anon-uid',isAnonymous:false};return {user:authMock.currentUser}};
+  installAuth({currentUser:anonymous,signInWithPopup:async()=>{authCalls.push('signInWithPopup')}});
+  await run('signInGoogle()');assert.deepEqual(authCalls,['linkWithPopup']);assert.equal(run('MP.id'),'anon-uid','Google linking retains the anonymous player UID');
+  assert.equal(run('MP.firebaseAdmin'),false,'optional player Google never grants admin');
+  assert.equal(run('MP.adminUnlocked'),false);
 
-  const googleAdmin = {uid: 'admin-test', displayName: 'Joan', email: 'joan@example.com'};
-  authCalls.length = 0;
-  authMock = {
-    currentUser: {isAnonymous: true, linkWithPopup: async () => {authCalls.push('linkWithPopup'); authMock.currentUser = googleAdmin; return {user: googleAdmin};}},
-    signInWithPopup: async () => {authCalls.push('signInWithPopup'); authMock.currentUser = googleAdmin; return {user: googleAdmin};}
-  };
-  context.mockDb = {ref: path => ({once: async () => ({val: () => path === 'admins/admin-test' ? true : null})})};
-  run('db=mockDb; MP.host=false; MP.firebaseAdmin=false; MP.adminUnlocked=false; usr=null; MP.err=""');
-  await run('signInGoogle(true)');
-  assert.deepEqual(authCalls, ['linkWithPopup'], 'admin sign-in links the current anonymous session when possible');
-  assert.equal(run('MP.firebaseAdmin'), true, 'admin sign-in refreshes the Firebase role immediately');
-  assert.equal(run('MP.host'), true);
-  assert.match(node('ov').innerHTML, /Acceso de administrador/, 'successful Google sign-in advances directly to the local password gate');
-  assert.equal(reloads, 0, 'admin popup flow does not interrupt the return to the password gate');
+  authCalls.length=0;
+  anonymous.linkWithPopup=async()=>{authCalls.push('linkWithPopup');throw {code:'auth/credential-already-in-use'}};
+  installAuth({currentUser:anonymous,signInWithPopup:async()=>{authCalls.push('signInWithPopup');authMock.currentUser={uid:'existing-google-uid'};return {user:authMock.currentUser}}});
+  await run('signInGoogle()');assert.deepEqual(authCalls,['linkWithPopup','signInWithPopup']);assert.equal(run('MP.id'),'existing-google-uid');
 
-  authMock = {
-    currentUser: {isAnonymous: false},
-    signInWithPopup: async () => {authMock.currentUser = {uid: 'other-user', email: 'other@example.com'}; return {user: authMock.currentUser};}
-  };
-  context.mockDb = {ref: path => ({once: async () => ({val: () => path === 'admins/other-user' ? false : null})})};
-  run('MP.host=false; MP.firebaseAdmin=false; MP.adminUnlocked=false; usr=null');
-  await run('signInGoogle(true)');
-  assert.match(node('ov').innerHTML, /other@example\.com/, 'unprivileged Google accounts receive a clear account/role message');
-  assert.match(node('ov').innerHTML, /Cambiar cuenta Google/, 'unprivileged account can switch Google accounts without bypassing authorization');
-  assert.doesNotMatch(node('ov').innerHTML, /Acceso de administrador/, 'a Google account without the Firebase admin role never reaches the password gate');
-
+  authCalls.length=0;
+  installAuth({currentUser:{uid:'existing-google-uid'},signInWithPopup:async()=>{authCalls.push('signInWithPopup');throw {code:'auth/popup-blocked'}},signInWithRedirect:async()=>{authCalls.push('signInWithRedirect')}});
+  const beforeSignInRedirect=reloads;await run('signInGoogle()');
+  assert.deepEqual(authCalls,['signInWithPopup','signInWithRedirect']);assert.equal(reloads,beforeSignInRedirect);
   console.log('behavior tests: OK');
-})().catch(error => {console.error(error); process.exitCode = 1;});
+})().catch(error=>{console.error(error);process.exitCode=1});

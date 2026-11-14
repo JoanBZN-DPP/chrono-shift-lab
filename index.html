@@ -32,6 +32,7 @@ body{padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(12px,env(
 <h1>THE CHRONO SHIFT LAB</h1>
 <div id="lv"></div>
 <div id="hud"><span>Movimientos: <b id="mv"></b></span><span>Clones activos: <b id="cl"></b></span><span>Bucle: <b id="lp"></b></span><span>⏱ <b id="tm">15:00</b></span><span>Puntos: <b id="sc">0</b></span><span id="net"></span></div>
+<button class="b" id="netRetry" type="button" style="display:none" onclick="retryFirebase()">Reintentar conexión</button>
 <div id="row"><canvas id="cv"></canvas><div id="lb"></div></div>
 <div id="info"></div><div id="msg"></div>
 <div><button class="b admin-access" id="admb" type="button" onclick="adminGate()">🔐 Panel de administración</button><button class="b" onclick="loopEnd()">Reiniciar Bucle (R)</button><button class="b" onclick="discard()">Descartar Bucle (Z)</button><button class="b" onclick="load(li)">Reiniciar Nivel (N)</button><button class="b" onclick="help()">Ayuda</button><button class="b" title="Disponible también mientras practicas; no necesitas ser administrador" onclick="lobby()">🌐 Partidas / Unirme</button></div>
@@ -157,7 +158,7 @@ function help(){ov(`<h2>THE CHRONO SHIFT LAB</h2>
 <li>Las placas abren las puertas del mismo color mientras tú, un clon o un bloque las pise; activa todas si hay varias.</li>
 <li>Evita láseres y puertas que se cierren sobre ti. Clones y bloques bloquean los láseres.</li>
 <li>En los niveles 11–20, los portales con el mismo número forman parejas; en los niveles 21–30, las cintas te empujan una casilla extra.</li>
-<li><b>Administración</b>: el panel siempre está disponible desde el botón <b>Panel de administración</b>; en el primer uso, el anfitrión debe crear una contraseña de al menos 8 caracteres.</li></ul>
+<li><b>Administración</b>: el panel siempre está disponible desde el botón <b>Panel de administración</b>; introduce la contraseña compartida del administrador. No hay configuración local.</li></ul>
 <button class="b" onclick="document.getElementById('ov').style.display='none'">Practicar</button><button class="b" onclick="lobby()">🎮 Unirme a una partida</button><button class="b admin-access" onclick="adminGate()">🔐 Abrir panel de administración</button>`)}
 addEventListener('keydown',e=>{if($('ov').style.display!='none')return;const k=e.key.toLowerCase();
  const m={arrowup:'U',w:'U',arrowdown:'D',s:'D',arrowleft:'L',a:'L',arrowright:'R',d:'R',' ':'W'}[k];
@@ -185,10 +186,10 @@ function draw(ts){ctx.clearRect(0,0,cv.width,cv.height);const pl=.5+.5*Math.sin(
  requestAnimationFrame(draw)}
 // ===== MODO ONLINE (30 jugadores · 15 min · ranking) =====
 const MP={joined:false,run:false,over:false,solved:0,score:0,name:'',id:'local',curLv:-1,lvT:0,seen:'',host:false,adminUnlocked:false,firebaseAdmin:false,lob:false,fin:false,mid:null,ph:'',err:'',roomCode:'',pendingProgress:null};
-let db=null,usr=null,MT=null,PL=[],firebaseApp=null,serverOffset=0,firebaseReady=false;
+let db=null,usr=null,MT=null,PL=[],firebaseApp=null,playerAuth=null,adminApp=null,adminAuth=null,adminDb=null,serverOffset=0,firebaseReady=false,netInitPromise=null,netListeners=[],netGeneration=0;
 let p2pHost=null,p2pGuest=null,p2pConn=null,p2pConnections=new Map(),lastPeerSync=0;
 const ROOM_PREFIX='chronoshift-';
-function closePanels(){MP.lob=false;MP.adm=false;if(phase()==='count'&&MT)MP.seen=MT.id+'c';$('ov').style.display='none'}
+function closePanels(){if(adminLoginBusy)cancelAdminLogin();MP.lob=false;MP.adm=false;if(phase()==='count'&&MT)MP.seen=MT.id+'c';$('ov').style.display='none'}
 function localPlayerId(){try{let id=localStorage.getItem('chrono-player-id-v1');if(!id){id='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);localStorage.setItem('chrono-player-id-v1',id)}return id}catch(e){return'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,10)}}
 const roomPeerId=code=>ROOM_PREFIX+String(code).toLowerCase();
 function p2pSend(conn,msg){try{if(conn&&conn.open)conn.send(msg)}catch(e){}}
@@ -246,11 +247,13 @@ let LOCAL_CFG={...DEFAULT_CFG};
 try{LOCAL_CFG={...DEFAULT_CFG,...JSON.parse(localStorage.getItem('chrono-game-config-v1')||'{}')}}catch(e){}
 const gameCfg=()=>({...DEFAULT_CFG,...LOCAL_CFG,...(MT&&MT.settings||{})});
 function levelRules(i){const c=gameCfg();return{m:Math.max(1,Math.min(60,Number(c.moves?.[i]??LV[i].m)||LV[i].m)),c:Math.max(0,Math.min(8,Number(c.clones?.[i]??LV[i].c)||0))}}
-const ADMIN_KEY='chrono-admin-credential-v1';
-const ADMIN_RETURN_KEY='chrono-admin-open-after-auth-v1';
-const isAdmin=()=>!!(MP.host&&MP.adminUnlocked&&(!db||MP.firebaseAdmin));
+
+const ADMIN_EMAIL='chrono-shift-admin@chrono-shift-lab.firebaseapp.com';
+const ADMIN_TIMEOUT_MS=9000;
+let adminAttempt=0,adminLoginBusy=false,activeAdminSession=null,candidateAdminSession=null,pendingAnonymousSignIn=null;
+const networkState={connected:false,ready:false,stage:'Iniciando conexión…',error:''};
+const isAdmin=()=>!!(MP.host&&MP.adminUnlocked&&(!window.CHRONO_FIREBASE_CONFIG||MP.firebaseAdmin));
 const adminRole=(roles,uid)=>!!(uid&&roles&&roles[uid]===true);
-function resumeAdminAfterAuth(){let shouldOpen=false;try{shouldOpen=sessionStorage.getItem(ADMIN_RETURN_KEY)==='1';if(shouldOpen)sessionStorage.removeItem(ADMIN_RETURN_KEY)}catch(e){}if(shouldOpen)adminGate()}
 const serverNow=()=>nowServer();
 const decodeProgress=value=>{try{return typeof value==='string'?JSON.parse(value):value}catch(e){return null}};
 const stableProgress=p=>p&&typeof p==='object'&&Number.isInteger(Number(p.level))&&Number(p.level)>=0&&Number(p.level)<LV.length&&Array.isArray(p.moves)&&p.moves.length<=120&&p.moves.every(a=>typeof a==='string'&&'UDLRW'.includes(a)&&a.length===1)&&Array.isArray(p.clones)&&p.clones.length<=8&&p.clones.every(a=>Array.isArray(a)&&a.length<=120&&a.every(x=>typeof x==='string'&&'UDLRW'.includes(x)&&x.length===1))&&p.position&&Array.isArray(p.clonePositions)&&p.clonePositions.length===p.clones.length&&Array.isArray(p.blocks)&&Number.isFinite(Number(p.loop))&&Number.isFinite(Number(p.lvT));
@@ -259,33 +262,134 @@ function phase(){const n=nowServer();if(!MT)return'none';if(!MT.startAt)return'l
 const ranked=()=>PL.filter(p=>MT&&p.matchId==MT.id).sort((a,b)=>b.score-a.score||a.t-b.t);
 const rows=(r,max)=>r.slice(0,max).map((p,i)=>`<div class="${p.id==MP.id?'me':''}">${['🥇','🥈','🥉'][i]||(i+1)+'.'} ${esc(p.name)} · Nv ${p.solved} · ${p.score}</div>`).join('');
 function board(){const r=ranked(),p=phase();$('lb').innerHTML='<b>🏆 Ranking ('+r.length+'/'+(MT?gameCfg().maxPlayers:30)+')</b>'+(MT?'':'<div>Sin partida activa</div>')+rows(r,30)+((!MP.joined&&MT&&p!='over')?'<br><button class="b" onclick="lobby()">Unirme</button>':'')}
- async function netInit(){
+
+function withTimeout(promise,label){
+ let timer;
+ return new Promise((resolve,reject)=>{
+  timer=setTimeout(()=>reject(new Error(label+' tardó demasiado. Comprueba la conexión y reintenta.')),ADMIN_TIMEOUT_MS);
+  Promise.resolve(promise).then(value=>{clearTimeout(timer);resolve(value)},error=>{clearTimeout(timer);reject(error)});
+ });
+}
+function detachNetListeners(list=netListeners){
+ list.splice(0).forEach(entry=>{try{if(typeof entry==='function')entry();else entry[0].off(entry[1],entry[2])}catch(e){}});
+}
+function renderNetworkStatus(){
+ if(window.CHRONO_FIREBASE_CONFIG==null)return;
+ const admin=activeAdminSession;
+ $('netRetry').style.display=networkState.error?'':'none';
+ if(admin?.ready&&!admin.closed){$('net').textContent=admin.connected?'🟢 Firebase RTDB · administrador':'🟡 Firebase administrador reconectando…';return}
+ $('net').textContent=networkState.error?'🔴 Firebase desconectado · reintenta':networkState.ready?(networkState.connected?'🟢 Firebase RTDB':'🟡 Firebase reconectando…'):'🟡 Firebase · '+networkState.stage;
+}
+function applyMatchSnapshot(snapshot){MT=snapshot.exists()?snapshot.val():null;onMatch()}
+function applyPlayersSnapshot(snapshot){
+ const value=snapshot.val()||{};PL=Object.entries(value).map(([id,player])=>({id,...player}));board();
+ if(MP.lob)lobby();admUp();if(MP.over&&MP.fin&&!MP.adm)showFinal();
+}
+function listenForFirstValue(ref,apply,list,current,onError){
+ if(!current())return Promise.resolve(null);
+ return new Promise((resolve,reject)=>{
+  let first=true;
+  const receive=snapshot=>{if(!current())return;apply(snapshot);if(first){first=false;resolve(snapshot)}};
+  const fail=error=>{if(!current())return;if(first){first=false;reject(error)}onError(error)};
+  list.push([ref,'value',receive]);ref.on('value',receive,fail);
+ });
+}
+function initialPlayerUser(auth,list){
+ if(auth.currentUser)return Promise.resolve(auth.currentUser);
+ return new Promise((resolve,reject)=>{
+  let stop=null,done=false;
+  const finish=(error,user)=>{if(done)return;done=true;if(stop)stop();error?reject(error):resolve(user)};
+  stop=auth.onAuthStateChanged(user=>finish(null,user),error=>finish(error));
+  if(done)stop();else list.push(()=>{done=true;stop()});
+ });
+}
+async function netInit(){
+ if(netInitPromise)return netInitPromise;
+ const generation=++netGeneration,listeners=[];
+ detachNetListeners();netListeners=listeners;
+ const current=()=>generation===netGeneration;
  const cfg=window.CHRONO_FIREBASE_CONFIG;
  if(cfg==null){MP.id=localPlayerId();MP.host=true;MP.firebaseAdmin=false;$('net').textContent=window.Peer?'🟡 Firebase pendiente · P2P no persistente':'⚪ Firebase pendiente · práctica local';$('admb').style.display='';firebaseReady=true;return}
- try{if(!cfg.apiKey||!cfg.databaseURL||!window.firebase)throw new Error('Falta la configuración de Firebase o no cargó su SDK.');firebaseApp=firebase.initializeApp(cfg);db=firebase.database();const auth=firebase.auth();db.ref('.info/serverTimeOffset').on('value',x=>{serverOffset=Number(x.val())||0},firebaseFail);await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);try{await auth.getRedirectResult()}catch(e){console.warn('Google redirect:',e.code||e.message||e)}await new Promise(resolve=>{const stop=auth.onAuthStateChanged(u=>{stop();resolve(u)})});let u=auth.currentUser;if(!u)u=await auth.signInAnonymously().then(r=>r.user);usr=u;MP.id=u.uid;MP.name=MP.name||u.displayName||'';const roleSnap=await db.ref('admins/'+u.uid).once('value');MP.firebaseAdmin=adminRole({[u.uid]:roleSnap.val()},u.uid);MP.host=MP.firebaseAdmin;
-  db.ref('match/state').on('value',x=>{MT=x.exists()?x.val():null;onMatch()},firebaseFail);db.ref('players').on('value',x=>{const v=x.val()||{};PL=Object.entries(v).map(([id,y])=>({id,...y}));board();if(MP.lob)lobby();admUp();if(MP.over&&MP.fin&&!MP.adm)showFinal()},firebaseFail);db.ref('.info/connected').on('value',x=>{$('net').textContent=x.val()?'🟢 Firebase RTDB':'🟡 Firebase reconectando…'});$('admb').style.display='';firebaseReady=true;
- }catch(e){firebaseFail(e);usr=null;MP.err='Firebase configurado pero desconectado: '+(e.message||e.code||'error');$('net').textContent='🔴 Firebase desconectado (sin fallback P2P)';$('admb').style.display='';firebaseReady=true;}
- }
-function firebaseFail(e){$('net').textContent='🔴 Firebase desconectado';MP.err='Firebase no disponible; la práctica local permanece activa, pero la nube está desconectada.';if(e&&e.code)console.warn('Firebase:',e.code)}
-async function popupWithRedirect(popup,redirect){try{await popup();return true}catch(e){if(e?.code!=='auth/popup-blocked')throw e;await redirect();return false}}
-async function refreshAdminIdentity(){const u=firebase.auth().currentUser;if(!u)throw new Error('No quedó activa una sesión de Google.');usr=u;MP.id=u.uid;MP.name=MP.name||u.displayName||'';const roleSnap=await db.ref('admins/'+u.uid).once('value');MP.firebaseAdmin=adminRole({[u.uid]:roleSnap.val()},u.uid);MP.host=MP.firebaseAdmin;return u}
-async function signInGoogle(openAdmin=false){if(!firebaseApp){MP.err='Google requiere Firebase configurado.';lobby();return}const returnToAdmin=openAdmin||$('ov').innerHTML.includes('Administración no autorizada'),provider=new firebase.auth.GoogleAuthProvider(),a=firebase.auth();try{if(returnToAdmin){sessionStorage.setItem(ADMIN_RETURN_KEY,'1');provider.setCustomParameters?.({prompt:'select_account'})}const u=a.currentUser;if(u&&u.isAnonymous){try{if(!await popupWithRedirect(()=>u.linkWithPopup(provider),()=>u.linkWithRedirect(provider)))return}catch(e){if(e.code==='auth/credential-already-in-use'||e.code==='auth/provider-already-linked'){if(!await popupWithRedirect(()=>a.signInWithPopup(provider),()=>a.signInWithRedirect(provider)))return}else throw e}}else if(!await popupWithRedirect(()=>a.signInWithPopup(provider),()=>a.signInWithRedirect(provider)))return;if(returnToAdmin){await refreshAdminIdentity();try{sessionStorage.removeItem(ADMIN_RETURN_KEY)}catch(_){}adminGate()}else location.reload()}catch(e){if(returnToAdmin){try{sessionStorage.removeItem(ADMIN_RETURN_KEY)}catch(_){}}MP.err='No se pudo iniciar sesión con Google: '+(e.message||e.code||'error')+'. El progreso anónimo no se fusiona automáticamente.';lobby()}}
+ const previousError=networkState.error;
+ Object.assign(networkState,{connected:false,ready:false,stage:'Iniciando conexión…',error:''});renderNetworkStatus();
+ const fail=error=>{
+  if(!current())return;
+  ++netGeneration;detachNetListeners(listeners);firebaseReady=true;
+  networkState.ready=false;networkState.error='Firebase no disponible: '+(error?.message||error?.code||'error')+'. Reintenta la conexión.';
+  MP.err=networkState.error;$('admb').style.display='';renderNetworkStatus();
+  if(error?.code)console.warn('Firebase:',error.code);
+ };
+ const work=(async()=>{
+  if(!cfg.apiKey||!cfg.databaseURL||!window.firebase)throw new Error('Falta la configuración de Firebase o no cargó su SDK.');
+  try{firebaseApp=firebase.app()}catch(e){firebaseApp=firebase.initializeApp(cfg)}
+  db=firebase.database(firebaseApp);playerAuth=firebase.auth(firebaseApp);
+  const connectedRef=db.ref('.info/connected'),offsetRef=db.ref('.info/serverTimeOffset');
+  const connected=snapshot=>{if(current()){networkState.connected=!!snapshot.val();renderNetworkStatus()}};
+  const offset=snapshot=>{if(current())serverOffset=Number(snapshot.val())||0};
+  listeners.push([connectedRef,'value',connected],[offsetRef,'value',offset]);
+  connectedRef.on('value',connected,fail);offsetRef.on('value',offset,fail);
+  networkState.stage='Autenticando jugador…';renderNetworkStatus();
+  await playerAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);if(!current())return;
+  try{await playerAuth.getRedirectResult()}catch(error){if(current())console.warn('Google redirect:',error.code||'error')}
+  if(!current())return;
+  let user=await initialPlayerUser(playerAuth,listeners);if(!current())return;
+  if(!user){
+   if(!pendingAnonymousSignIn){const pending=playerAuth.signInAnonymously();pendingAnonymousSignIn=pending;pending.then(()=>{if(pendingAnonymousSignIn===pending)pendingAnonymousSignIn=null},()=>{if(pendingAnonymousSignIn===pending)pendingAnonymousSignIn=null})}
+   user=(await pendingAnonymousSignIn).user;
+  }
+  if(!current())return;
+  usr=user;MP.id=user.uid;MP.name=MP.name||user.displayName||'';
+  networkState.stage='Sincronizando partida…';renderNetworkStatus();
+  await Promise.all([
+   listenForFirstValue(db.ref('match/state'),applyMatchSnapshot,listeners,current,fail),
+   listenForFirstValue(db.ref('players'),applyPlayersSnapshot,listeners,current,fail)
+  ]);
+  if(!current())return;
+  networkState.ready=true;firebaseReady=true;if(MP.err===previousError)MP.err='';$('admb').style.display='';renderNetworkStatus();
+ })();
+ const task=withTimeout(work,'La conexión con Firebase').catch(fail);
+ netInitPromise=task;
+ try{return await task}finally{if(netInitPromise===task)netInitPromise=null}
+}
+async function retryFirebase(){await netInit();if(MP.lob)lobby()}
+function firebaseFail(error){
+ networkState.ready=false;networkState.error='Firebase no disponible; reintenta la conexión.';MP.err=networkState.error;renderNetworkStatus();
+ if(error?.code)console.warn('Firebase:',error.code);
+}
+async function popupWithRedirect(popup,redirect){try{await popup();return true}catch(error){if(error?.code!=='auth/popup-blocked')throw error;await redirect();return false}}
+async function signInGoogle(){
+ if(!playerAuth||!usr){MP.err='Espera a que termine la conexión de jugador o reintenta Firebase.';lobby();return}
+ try{
+  const provider=new firebase.auth.GoogleAuthProvider(),current=playerAuth.currentUser;
+  if(current?.isAnonymous){
+   try{if(!await popupWithRedirect(()=>current.linkWithPopup(provider),()=>current.linkWithRedirect(provider)))return}
+   catch(error){if(error?.code!=='auth/credential-already-in-use'&&error?.code!=='auth/provider-already-linked')throw error;if(!await popupWithRedirect(()=>playerAuth.signInWithPopup(provider),()=>playerAuth.signInWithRedirect(provider)))return}
+  }else if(!await popupWithRedirect(()=>playerAuth.signInWithPopup(provider),()=>playerAuth.signInWithRedirect(provider)))return;
+  const user=playerAuth.currentUser;if(user){usr=user;MP.id=user.uid;MP.name=MP.name||user.displayName||''}location.reload();
+ }catch(error){MP.err='No se pudo iniciar sesión con Google: '+(error.message||error.code||'error')+'. Los historiales de cuentas distintas no se fusionan automáticamente.';lobby()}
+}
 function onMatch(){if(MT&&MP.mid!=MT.id){MP.mid=MT.id;MP.joined=false;MP.run=false;MP.over=false;MP.fin=false;MP.solved=0;MP.score=0;MP.curLv=-1;MP.seen=''}tick();board();if(MP.lob)lobby();admUp();if(MT&&(MT.ban||[]).includes(MP.id)&&MP.run){MP.run=false;MP.over=true;tk++;state='over';ov('<h2>Fuiste expulsado de la partida</h2>')}}
-async function setMatch(o){if(!isAdmin()){MP.err='Solo el administrador autenticado puede gestionar la partida.';return}try{if(db)await db.ref('match/state').set({...o,updatedAt:firebase.database.ServerValue.TIMESTAMP});else{MT=o;onMatch();p2pBroadcast()}}catch(e){MP.err='Solo el anfitrión puede gestionar la partida.'}}
+
+async function setMatch(o){
+ if(!isAdmin()){MP.err='Solo el administrador autenticado puede gestionar la partida.';return false}
+ try{if(window.CHRONO_FIREBASE_CONFIG!=null){if(!adminDb)throw new Error('La sesión de administrador no está conectada.');await adminDb.ref('match/state').set({...o,updatedAt:firebase.database.ServerValue.TIMESTAMP})}else{MT=o;onMatch();p2pBroadcast()}return true}
+ catch(error){MP.err='No se pudo guardar la partida: '+(error.message||error.code||'error');admUp();return false}
+}
 async function newMatch(){if(!isAdmin())return;const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',code=Array.from({length:6},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
- if(!db){try{await p2pHostStart(code)}catch(e){MP.err=e&&e.type==='unavailable-id'?'Ese código ya está ocupado. Intenta crear otra sala.':'No se pudo abrir la sala P2P. Comprueba la conexión a internet e inténtalo de nuevo.';MP.adm?adm():lobby();return}PL=[]}
- await setMatch({id:''+Date.now(),code,startAt:null,endAt:null,ban:[],settings:gameCfg()});MP.err='';MP.adm?adm():lobby()}
+ if(window.CHRONO_FIREBASE_CONFIG==null&&!db){try{await p2pHostStart(code)}catch(e){MP.err=e&&e.type==='unavailable-id'?'Ese código ya está ocupado. Intenta crear otra sala.':'No se pudo abrir la sala P2P. Comprueba la conexión a internet e inténtalo de nuevo.';MP.adm?adm():lobby();return}PL=[]}
+ const saved=await setMatch({id:''+Date.now(),code,startAt:null,endAt:null,ban:[],settings:gameCfg()});if(saved)MP.err='';MP.adm?adm():lobby()}
 function startMatch(){if(!isAdmin()||!MT)return;const c=gameCfg(),s=serverNow()+c.countdownSec*1000;setMatch({...MT,startAt:s,endAt:s+c.durationSec*1000})}
 async function savePlayer(){if(!MT||((MT.ban||[]).includes(MP.id)))return;const progress=progressSnapshot();const o={name:MP.name,matchId:MT.id,solved:Math.max(0,Math.min(LV.length,Number(MP.solved)||0)),score:Math.max(0,Math.min(100000000,Number(MP.score)||0)),t:db?firebase.database.ServerValue.TIMESTAMP:Date.now(),progress};try{if(db)await db.ref('players/'+MP.id).update({...o,progress:JSON.stringify(progress)});else if(MP.host&&p2pHost){const i=PL.findIndex(x=>x.id===MP.id);if(i<0)PL.push({id:MP.id,...o});else PL[i]={...PL[i],...o};board();p2pBroadcast()}else if(p2pConn){p2pSend(p2pConn,{type:'score',player:o})}}catch(e){MP.err='No se pudo guardar en Firebase; se mantiene la práctica local.';$('msg').textContent=MP.err}}
-async function join(){const nm=($('nick')?.value||'').trim().slice(0,16),code=($('joinCode')?.value||'').trim().toUpperCase().replace(/\s+/g,'');if(!nm){MP.err='Escribe tu apodo para unirte a la partida.';lobby();return}if(window.CHRONO_FIREBASE_CONFIG!=null&&!db){MP.err='Firebase no está conectado. Puedes practicar, pero no abrir una sala P2P en este modo.';lobby();return}if(!db){if(!/^[A-Z0-9]{6}$/.test(code)){MP.err='Escribe el código de sala de 6 caracteres.';lobby();return}MP.host=false;await p2pGuestJoin(code,nm);return}if(!MT||!['lobby','count','run'].includes(phase())){MP.err='No hay una partida abierta para unirse. Espera a que el anfitrión la cree.';lobby();return}if(MT.code&&code!==String(MT.code).trim().toUpperCase()){MP.err='El código no coincide con la partida disponible.';lobby();return}if((MT.ban||[]).includes(MP.id)){MP.err='Fuiste expulsado de esta partida.';lobby();return}MP.name=nm;
+async function join(){const nm=($('nick')?.value||'').trim().slice(0,16),code=($('joinCode')?.value||'').trim().toUpperCase().replace(/\s+/g,'');if(!nm){MP.err='Escribe tu apodo para unirte a la partida.';lobby();return}if(window.CHRONO_FIREBASE_CONFIG!=null&&(!db||!usr||!networkState.ready)){MP.err='Firebase todavía está sincronizando jugadores. Reintenta la conexión antes de unirte.';lobby();return}if(window.CHRONO_FIREBASE_CONFIG!=null&&!db){MP.err='Firebase no está conectado. Puedes practicar, pero no abrir una sala P2P en este modo.';lobby();return}if(!db){if(!/^[A-Z0-9]{6}$/.test(code)){MP.err='Escribe el código de sala de 6 caracteres.';lobby();return}MP.host=false;await p2pGuestJoin(code,nm);return}if(!MT||!['lobby','count','run'].includes(phase())){MP.err='No hay una partida abierta para unirse. Espera a que el anfitrión la cree.';lobby();return}if(MT.code&&code!==String(MT.code).trim().toUpperCase()){MP.err='El código no coincide con la partida disponible.';lobby();return}if((MT.ban||[]).includes(MP.id)){MP.err='Fuiste expulsado de esta partida.';lobby();return}MP.name=nm;
  let me=PL.find(x=>x.id==MP.id&&x.matchId==MT.id);if(db){const snap=await db.ref('players/'+MP.id).once('value');const remote=snap.val();if(remote&&remote.matchId===MT.id)me={id:MP.id,...remote};}
  if(!me&&PL.filter(x=>x.matchId==MT.id).length>=gameCfg().maxPlayers){MP.err='Sala llena ('+gameCfg().maxPlayers+'/'+gameCfg().maxPlayers+')';lobby();return}
  MP.solved=me?Number(me.solved)||0:0;MP.score=me?Number(me.score)||0:0;MP.pendingProgress=me?.progress||null;MP.joined=true;MP.err='';if(!me)await db.ref('players/'+MP.id).update({name:MP.name,matchId:MT.id,solved:0,score:0,t:firebase.database.ServerValue.TIMESTAMP});lobby();tick()}
 function lobby(){MP.lob=true;const p=phase(),n=ranked().length,d=$('nick');if(d&&d.value)MP.name=d.value;
-		 const cfg=gameCfg();let h='<h2>🌐 Sala online</h2>'+(firebaseApp?'<p><button class="b" onclick="signInGoogle()">Continuar con Google</button> <span class="admin-note">Usa la misma cuenta Google en otro equipo para recuperar tu progreso.</span></p>':'<p class="admin-note">Firebase está pendiente de configuración. El modo P2P no guarda partidas cuando el anfitrión se desconecta.</p>')+'<p>Hasta '+cfg.maxPlayers+' jugadores · '+fmt(cfg.durationSec*1000)+' · gana quien más puntos sume. Cada nivel otorga puntos según el tiempo empleado y cuántos jugadores ya lo completaron. Los niveles se superan en orden.</p>';
+			 const cfg=gameCfg(),cloudConfigured=window.CHRONO_FIREBASE_CONFIG!=null,canJoin=!cloudConfigured||!!(db&&usr&&networkState.ready);let h='<h2>🌐 Sala online</h2>'+(firebaseApp?'<p><button class="b" onclick="signInGoogle()">Continuar con Google</button> <span class="admin-note">Usa la misma cuenta Google en otro equipo para recuperar tu progreso.</span></p>':'<p class="admin-note">Firebase está pendiente de configuración. El modo P2P no guarda partidas cuando el anfitrión se desconecta.</p>')+'<p>Hasta '+cfg.maxPlayers+' jugadores · '+fmt(cfg.durationSec*1000)+' · gana quien más puntos sume. Cada nivel otorga puntos según el tiempo empleado y cuántos jugadores ya lo completaron. Los niveles se superan en orden.</p>';
 		 h+=`<p>Estado: <b>${{none:'sin partida',lobby:'sala de espera',count:'comenzando',run:'en curso',over:'terminada'}[p]}</b> · Jugadores: <b>${n}/${cfg.maxPlayers}</b></p>`;
 		 if(MT&&(p=='lobby'||p=='count'||p=='run'))h+=`<div style="border:1px solid #0ff;padding:10px;margin:12px 0;text-align:left"><h3 style="color:#0ff;margin:0 0 6px">🎮 Partida disponible</h3><p>Estado: <b>${{lobby:'sala de espera',count:'cuenta atrás',run:'en curso'}[p]}</b> · ${MT.code?'Necesitas el código de acceso que comparte el administrador.':'Partida anterior sin código de acceso.'}</p><p class="admin-note">Puedes unirte aunque no seas administrador. También puedes volver a practicar mientras esperas.</p></div>`;
-		 if(!MP.joined&&((db&&['lobby','count','run'].includes(p))||(!db&&['none','lobby','count','run'].includes(p))))h+=`<label>Tu apodo<input id="nick" maxlength="16" placeholder="Tu apodo" value="${esc(MP.name)}"></label>${(!db||MT?.code)?'<label>Código de la partida<input id="joinCode" maxlength="6" minlength="6" placeholder="Ej. A7K2Q9" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>':''}<button class="b" onclick="join()">🎮 Unirme a la partida</button>`;
+			 if(cloudConfigured&&!canJoin)h+='<p class="admin-note">Firebase aún está sincronizando la partida y el jugador; espera o reintenta antes de unirte.</p><button class="b" onclick="retryFirebase()">Reintentar conexión</button>';
+			 if(!MP.joined&&canJoin&&((db&&['lobby','count','run'].includes(p))||(!db&&['none','lobby','count','run'].includes(p))))h+=`<label>Tu apodo<input id="nick" maxlength="16" placeholder="Tu apodo" value="${esc(MP.name)}"></label>${(!db||MT?.code)?'<label>Código de la partida<input id="joinCode" maxlength="6" minlength="6" placeholder="Ej. A7K2Q9" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>':''}<button class="b" onclick="join()">🎮 Unirme a la partida</button>`;
 		 if(!MP.joined&&(p=='none'||p=='over'))h+=db?"<p>No hay una partida abierta ahora. Cuando el anfitrión la cree, podrás unirte desde aquí sin ser administrador.</p><button class=\"b\" onclick=\"join()\">🎮 Unirme a una partida</button>":"<p>Ingresa el código de sala que comparta el anfitrión. El anfitrión debe mantener el juego abierto.</p>";
  if(MP.joined&&p=='lobby')h+='<p>✔ Estás dentro. Esperando a que el anfitrión inicie...</p>';
  if(MP.host&&(p=='none'||p=='over'))h+='<button class="b" onclick="adminGate()">🔐 Administración / nueva partida</button>';
@@ -318,13 +422,80 @@ const atime=()=>{const p=phase(),n=nowServer();return p=='run'?fmt(MT.endAt-n):p
 const admUp=()=>{if(MP.adm&&isAdmin()&&$('ov').style.display!='none')adm()};
 function stopMatch(){if(!isAdmin()||!MT)return;const n=serverNow();setMatch({...MT,startAt:Math.min(MT.startAt||n,n),endAt:n})}
 function adjustTime(seconds){if(!isAdmin()||phase()!='run')return;const endAt=Math.max(serverNow()+1000,MT.endAt+seconds*1000);setMatch({...MT,endAt})}
-async function kick(id,ban){if(!isAdmin())return;try{if(db)await db.ref('players/'+id).remove();else{PL=PL.filter(x=>x.id!=id);board();p2pBroadcast()}if(ban)await setMatch({...MT,ban:[...(MT.ban||[]),id]})}catch(e){MP.err='No se pudo expulsar al jugador.'}admUp()}
+
+async function kick(id,ban){
+ if(!isAdmin())return;
+ try{if(window.CHRONO_FIREBASE_CONFIG!=null){if(!adminDb)throw new Error('Administrador desconectado.');await adminDb.ref('players/'+id).remove()}else{PL=PL.filter(x=>x.id!=id);board();p2pBroadcast()}if(ban)await setMatch({...MT,ban:[...(MT.ban||[]),id]})}
+ catch(error){MP.err='No se pudo expulsar al jugador.'}admUp();
+}
 function clearPl(){if(isAdmin())ranked().forEach(p=>kick(p.id,0))}
-async function hashAdmin(password,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:150000,hash:'SHA-256'},key,256);return Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('')}
-function adminGate(){if(!firebaseReady){ov('<h2>🔄 Conectando con Firebase</h2><p>La administración se habilitará en cuanto termine la conexión. Espera un momento y pulsa Reintentar.</p><button class="b" onclick="adminGate()">Reintentar</button>');return}if(db&&(!usr||!MP.firebaseAdmin)){const uid=esc(usr?.uid||MP.id),email=usr?.email?'<b>'+esc(usr.email)+'</b>':'la sesión actual';ov('<h2>🔐 Administración no autorizada</h2><p>La cuenta Google '+email+' todavía no tiene el permiso de administrador de Firebase. Si iniciaste con otra cuenta, puedes cambiarla aquí.</p><p>UID Firebase: <b>'+uid+'</b></p><p>El rol requerido es <code>/admins/'+uid+': true</code>; solo puede configurarse desde Firebase Console o Admin SDK. La contraseña local no sustituye este permiso.</p><button class="b admin-access" onclick="signInGoogle(true)">Cambiar cuenta Google y volver al panel</button>');return}if(!MP.host)return;MP.adm=false;const exists=!!localStorage.getItem(ADMIN_KEY);ov(`<h2>🔐 ${exists?'Acceso de administrador':'Configurar administrador'}</h2><p>${exists?'Introduce la contraseña para abrir el panel.':'Primera configuración: crea una contraseña de administrador de al menos 8 caracteres antes de compartir el juego.'}</p>${MP.err?'<p style="color:#ff5470">'+esc(MP.err)+'</p>':''}<form onsubmit="event.preventDefault();adminLogin()"><label>Contraseña<input id="adminPass" type="password" autocomplete="current-password" required></label>${exists?'':'<label>Confirmar contraseña<input id="adminPass2" type="password" autocomplete="new-password" required></label>'}<button class="b" type="submit">${exists?'Entrar':'Crear contraseña'}</button><button class="b" type="button" onclick="document.getElementById('ov').style.display='none'">Cancelar</button></form><p class="admin-note">Se guarda un hash de la contraseña en este navegador. En partidas online, los permisos del anfitrión también deben estar habilitados.</p>`)}
-async function adminLogin(){if(!MP.host)return;const pass=$('adminPass')?.value||'',old=localStorage.getItem(ADMIN_KEY);try{if(!crypto?.subtle)throw new Error('Este navegador no permite almacenar la contraseña de forma segura.');if(old){const [salt,want]=old.split(':');if(await hashAdmin(pass,salt)!==want){MP.err='Contraseña incorrecta.';adminGate();return}}else{const confirm=$('adminPass2')?.value||'';if(pass.length<8||pass!==confirm){MP.err=pass.length<8?'Usa al menos 8 caracteres.':'Las contraseñas no coinciden.';adminGate();return}const salt=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem(ADMIN_KEY,salt+':'+await hashAdmin(pass,salt))}MP.adminUnlocked=true;MP.adm=true;MP.err='';adm()}catch(e){MP.err=e.message||'No se pudo verificar la contraseña.';adminGate()}}
-function changeAdminPassword(){if(!isAdmin())return;ov(`<h2>Cambiar contraseña</h2><label>Contraseña actual<input id="oldPass" type="password" required></label><label>Nueva contraseña (mínimo 8 caracteres)<input id="newPass" type="password" required></label><label>Confirmar nueva contraseña<input id="newPass2" type="password" required></label><button class="b" onclick="saveAdminPassword()">Guardar</button><button class="b" onclick="adm()">Cancelar</button>`)}
-async function saveAdminPassword(){if(!isAdmin())return;const record=localStorage.getItem(ADMIN_KEY),[salt,want]=record.split(':'),old=$('oldPass').value,np=$('newPass').value,np2=$('newPass2').value;if(await hashAdmin(old,salt)!==want){MP.err='La contraseña actual no coincide.';changeAdminPassword();return}if(np.length<8||np!==np2){MP.err=np.length<8?'Usa al menos 8 caracteres.':'Las contraseñas nuevas no coinciden.';changeAdminPassword();return}const ns=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem(ADMIN_KEY,ns+':'+await hashAdmin(np,ns));MP.err='Contraseña actualizada.';adm()}
+
+function disposeAdminSession(session){
+ if(!session)return;session.closed=true;detachNetListeners(session.listeners);
+ try{Promise.resolve(session.auth?.signOut()).catch(()=>{})}catch(e){}
+ try{Promise.resolve(session.app?.delete?.()).catch(()=>{})}catch(e){}
+}
+function lockAdminSession(session){
+ if(activeAdminSession!==session)return;
+ activeAdminSession=null;adminApp=null;adminAuth=null;adminDb=null;
+ MP.host=false;MP.firebaseAdmin=false;MP.adminUnlocked=false;disposeAdminSession(session);renderNetworkStatus();
+}
+function cancelAdminLogin(){
+ ++adminAttempt;adminLoginBusy=false;disposeAdminSession(candidateAdminSession);candidateAdminSession=null;
+ $('ov').style.display='none';
+}
+function adminGate(){
+ if(isAdmin()){adm();return}
+ MP.adm=false;
+ ov(`<h2>🔐 Acceso de administrador</h2><p>Introduce la contraseña compartida del administrador.</p>${MP.err?'<p role="alert" style="color:#ff5470">'+esc(MP.err)+'</p>':''}<form onsubmit="event.preventDefault();adminLogin()"><label>Contraseña<input id="adminPass" type="password" autocomplete="current-password" required ${adminLoginBusy?'disabled':''}></label><button class="b admin-access" type="submit" ${adminLoginBusy?'disabled':''}>${adminLoginBusy?'Verificando…':'Entrar'}</button><button class="b" type="button" onclick="cancelAdminLogin()">Cancelar</button></form><p class="admin-note">La contraseña se valida en Firebase. No se guarda en este dispositivo ni en el código.</p>`);
+}
+async function adminLogin(){
+ if(adminLoginBusy)return;
+ const pass=$('adminPass')?.value||'';
+ if(!pass){MP.err='Escribe la contraseña.';adminGate();return}
+ if(window.CHRONO_FIREBASE_CONFIG==null){if(pass.length<8){MP.err='Usa al menos 8 caracteres.';adminGate();return}MP.host=true;MP.adminUnlocked=true;MP.err='';adm();return}
+ const attempt=++adminAttempt,session={app:null,auth:null,db:null,listeners:[],ready:false,connected:false,closed:false};
+ const current=()=>attempt===adminAttempt&&!session.closed;
+ candidateAdminSession=session;adminLoginBusy=true;MP.err='';adminGate();
+ const failLive=error=>{
+  if(!current()||!session.ready)return;
+  const visible=MP.adm;lockAdminSession(session);++adminAttempt;MP.err='La sesión de administrador se desconectó. Vuelve a entrar con la contraseña.';if(visible)adminGate();
+ };
+ const work=(async()=>{
+  const cfg=window.CHRONO_FIREBASE_CONFIG;
+  if(!cfg?.apiKey||!cfg.databaseURL||!window.firebase)throw new Error('Firebase no está disponible. Recarga la página o reintenta.');
+  session.app=firebase.initializeApp(cfg,'chrono-shift-admin-'+attempt);
+  session.auth=firebase.auth(session.app);session.db=firebase.database(session.app);
+  await session.auth.setPersistence(firebase.auth.Auth.Persistence.NONE);if(!current())return;
+  const signIn=session.auth.signInWithEmailAndPassword(ADMIN_EMAIL,pass);
+  signIn.then(()=>{if(!current())disposeAdminSession(session)},()=>{});
+  const result=await signIn;if(!current())return;
+  const user=result.user;if(!user)throw new Error('Firebase no devolvió la identidad del administrador.');
+  const role=await session.db.ref('admins/'+user.uid).once('value');if(!current())return;
+  if(role.val()!==true)throw new Error('La identidad autenticada no tiene permiso de administrador.');
+  let pendingError=null;
+  const onError=error=>{if(session.ready)failLive(error);else pendingError=error};
+  const connectedRef=session.db.ref('.info/connected'),connected=snapshot=>{if(current()){session.connected=!!snapshot.val();renderNetworkStatus()}};
+  session.listeners.push([connectedRef,'value',connected]);connectedRef.on('value',connected,onError);
+  await Promise.all([
+   listenForFirstValue(session.db.ref('match/state'),applyMatchSnapshot,session.listeners,current,onError),
+   listenForFirstValue(session.db.ref('players'),applyPlayersSnapshot,session.listeners,current,onError)
+  ]);
+  if(!current())return;if(pendingError)throw pendingError;
+  session.ready=true;activeAdminSession=session;candidateAdminSession=null;
+  adminApp=session.app;adminAuth=session.auth;adminDb=session.db;
+  MP.firebaseAdmin=true;MP.host=true;MP.adminUnlocked=true;MP.err='';adminLoginBusy=false;renderNetworkStatus();adm();
+ })();
+ try{await withTimeout(work,'El acceso de administrador')}
+ catch(error){
+  if(!current())return;
+  ++adminAttempt;disposeAdminSession(session);candidateAdminSession=null;adminLoginBusy=false;
+  MP.host=false;MP.firebaseAdmin=false;MP.adminUnlocked=false;
+  MP.err=['auth/wrong-password','auth/invalid-credential','auth/invalid-login-credentials','auth/user-not-found'].includes(error.code)?'Contraseña incorrecta.':error.message||error.code||'No se pudo autenticar al administrador.';
+  renderNetworkStatus();adminGate();
+ }
+}
+function changeAdminPassword(){if(!isAdmin())return;MP.err='La contraseña compartida se administra en Firebase, no en este dispositivo.';adm()}
 function saveSettings(){if(!isAdmin())return;const num=id=>Number($(id).value),c=gameCfg(),settings={...c,durationSec:Math.max(60,Math.min(7200,num('cfgDuration')*60)),countdownSec:Math.max(0,Math.min(120,num('cfgCountdown'))),maxPlayers:Math.max(1,Math.min(30,num('cfgPlayers'))),basePoints:Math.max(0,Math.min(100000,num('cfgBase'))),minPoints:Math.max(0,Math.min(100000,num('cfgMinimum'))),timePenaltyPerMinute:Math.max(0,Math.min(100000,num('cfgTimePenalty'))),crowdPenalty:Math.max(0,Math.min(100000,num('cfgCrowdPenalty'))),moves:{...c.moves},clones:{...c.clones}};if(settings.minPoints>settings.basePoints)settings.minPoints=settings.basePoints;for(let i=0;i<LV.length;i++){settings.moves[i]=Math.max(1,Math.min(60,num('mv'+i)));settings.clones[i]=Math.max(0,Math.min(8,num('cl'+i)))}LOCAL_CFG=settings;try{localStorage.setItem('chrono-game-config-v1',JSON.stringify(settings))}catch(e){}if(MT){const updated={...MT,settings};if(phase()=='run'&&MT.startAt)updated.endAt=MT.startAt+settings.durationSec*1000;setMatch(updated)}adm()}
 function adm(){if(!isAdmin())return;MP.adm=true;MP.lob=false;const p=phase(),r=ranked(),c=gameCfg();let h=`<h2>🛠 Panel de administración</h2><p>Estado: <b>${{none:'sin partida',lobby:'sala de espera',count:'cuenta atrás',run:'EN CURSO',over:'terminada'}[p]}</b> · Jugadores: <b>${r.length}/${c.maxPlayers}</b> · Niveles: ${LV.length}</p><div id="at" style="font-size:44px;color:#ffe600;text-align:center;text-shadow:0 0 12px #ffe600">${atime()}</div><div style="text-align:center">`;
 if(p=='none'||p=='over')h+='<button class="b" onclick="newMatch()">➕ Crear partida</button>';
@@ -334,9 +505,9 @@ if(p=='run')h+='<button class="b" onclick="adjustTime(-60)">−1 min</button><bu
 	if(MT&&r.length)h+='<button class="b" onclick="clearPl()">🧹 Vaciar jugadores</button>';
 	h+='</div>'+(MP.err?'<p style="color:#ff5470">'+esc(MP.err)+'</p>':'');
 	if(MT&&p!='none'&&p!='over'&&MT.code)h+='<div style="border:1px solid #0ff;padding:12px;margin:12px 0;text-align:center"><b style="color:#0ff">Código para compartir con los jugadores</b><div style="font-size:30px;letter-spacing:5px;color:#ffe600;margin:6px">'+esc(MT.code)+'</div><span class="admin-note">Los jugadores abren “Partidas / Unirme” e ingresan este código.</span></div>';
-	h+=`<h3 style="color:#0ff">Parámetros de partida y puntuación</h3><div class="admin-grid"><label>Duración (min)<input id="cfgDuration" type="number" min="1" max="120" value="${Math.round(c.durationSec/60)}"></label><label>Cuenta atrás (seg)<input id="cfgCountdown" type="number" min="0" max="120" value="${c.countdownSec}"></label><label>Máximo jugadores (1–30)<input id="cfgPlayers" type="number" min="1" max="30" value="${c.maxPlayers}"></label><label>Puntos base por nivel<input id="cfgBase" type="number" min="0" value="${c.basePoints}"></label><label>Puntos mínimos por nivel<input id="cfgMinimum" type="number" min="0" value="${c.minPoints}"></label><label>Descuento por minuto empleado<input id="cfgTimePenalty" type="number" min="0" value="${c.timePenaltyPerMinute}"></label><label>Descuento por jugador que ya pasó<input id="cfgCrowdPenalty" type="number" min="0" value="${c.crowdPenalty}"></label></div><p class="admin-note">La puntuación baja según el tiempo usado y cuántos jugadores completaron ese nivel antes. La duración también se puede ajustar durante la partida.</p><h3 style="color:#0ff">Reglas por nivel</h3><div class="admin-levels"><table><tr><th>Nivel</th><th>Movimientos por bucle</th><th>Máx. clones</th></tr>${LV.map((l,i)=>{const q=levelRules(i);return`<tr><td>${i+1}. ${esc(l.n)}</td><td><input id="mv${i}" type="number" min="1" max="60" value="${q.m}"></td><td><input id="cl${i}" type="number" min="0" max="8" value="${q.c}"></td></tr>`}).join('')}</table></div><button class="b" onclick="saveSettings()">Guardar parámetros</button><button class="b" onclick="changeAdminPassword()">Cambiar contraseña</button>`;
+	h+=`<h3 style="color:#0ff">Parámetros de partida y puntuación</h3><div class="admin-grid"><label>Duración (min)<input id="cfgDuration" type="number" min="1" max="120" value="${Math.round(c.durationSec/60)}"></label><label>Cuenta atrás (seg)<input id="cfgCountdown" type="number" min="0" max="120" value="${c.countdownSec}"></label><label>Máximo jugadores (1–30)<input id="cfgPlayers" type="number" min="1" max="30" value="${c.maxPlayers}"></label><label>Puntos base por nivel<input id="cfgBase" type="number" min="0" value="${c.basePoints}"></label><label>Puntos mínimos por nivel<input id="cfgMinimum" type="number" min="0" value="${c.minPoints}"></label><label>Descuento por minuto empleado<input id="cfgTimePenalty" type="number" min="0" value="${c.timePenaltyPerMinute}"></label><label>Descuento por jugador que ya pasó<input id="cfgCrowdPenalty" type="number" min="0" value="${c.crowdPenalty}"></label></div><p class="admin-note">La puntuación baja según el tiempo usado y cuántos jugadores completaron ese nivel antes. La duración también se puede ajustar durante la partida.</p><h3 style="color:#0ff">Reglas por nivel</h3><div class="admin-levels"><table><tr><th>Nivel</th><th>Movimientos por bucle</th><th>Máx. clones</th></tr>${LV.map((l,i)=>{const q=levelRules(i);return`<tr><td>${i+1}. ${esc(l.n)}</td><td><input id="mv${i}" type="number" min="1" max="60" value="${q.m}"></td><td><input id="cl${i}" type="number" min="0" max="8" value="${q.c}"></td></tr>`}).join('')}</table></div><button class="b" onclick="saveSettings()">Guardar parámetros</button><button class="b" onclick="changeAdminPassword()">${window.CHRONO_FIREBASE_CONFIG!=null?'Gestionar contraseña en Firebase':'Contraseña local (sesión)'}</button>`;
 h+='<div style="max-height:30vh;overflow:auto;margin-top:12px"><table width="100%"><tr><td>#</td><td>Jugador</td><td>Nivel</td><td>Puntos</td><td></td></tr>'+r.map((q,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(q.name)+'</td><td>'+q.solved+'</td><td>'+q.score+'</td><td><button class="b" onclick="kick(\''+esc(q.id)+'\',1)">Expulsar</button></td></tr>').join('')+'</table></div><br><button class="b" onclick="MP.adm=false;document.getElementById(\'ov\').style.display=\'none\'">Cerrar panel</button>';
 ov(h)}
-netInit().then(resumeAdminAfterAuth);setInterval(tick,250);
+netInit();setInterval(tick,250);
 load(0);help();requestAnimationFrame(draw);
 </script></body></html>

@@ -8,14 +8,14 @@ Juego de puzles temporales con 30 niveles, clones, portales, cintas, puntuación
 
 El juego está desplegado en GitHub Pages y conectado a un proyecto real de Firebase Realtime Database en `us-central1`. La configuración pública está en `firebase-config.js`; una configuración web pública no es una clave privada.
 
-Está habilitado el acceso anónimo y Google Authentication, y el dominio de GitHub Pages está autorizado. Las reglas publicadas de `firebase.rules.json` no dejan la raíz abierta. La persistencia real conserva las salas, jugadores, puntuaciones y snapshots descritos más abajo.
+Está habilitado el acceso anónimo y Google Authentication opcional para jugadores, y el dominio de GitHub Pages está autorizado. La administración usa Email/Password de Firebase en una app Firebase separada. Las reglas publicadas de `firebase.rules.json` no dejan la raíz abierta. La persistencia real conserva las salas, jugadores, puntuaciones y snapshots descritos más abajo.
 
 ## Uso
 
-1. Entra con Google **antes de jugar** para recuperar el mismo UID y progreso si continúas desde otro computador.
+1. Para jugar, puedes entrar con Google desde **Partidas / Unirme** si quieres recuperar el mismo UID y progreso en otro computador; también puedes unirte por código con la identidad anónima del navegador.
 2. En **Partidas / Unirme**, escribe un apodo y el código que comparte el administrador. Todos los jugadores deben entrar en la misma partida; el reloj sincronizado es el del servidor y continúa aunque cierres el juego.
-3. Para administrar, abre **Panel de administración** en la pantalla principal o en la ayuda inicial; usa la cuenta Google autorizada y luego la contraseña local del panel. El inicio con ventana emergente abre el campo de contraseña directamente; si el navegador bloquea la ventana emergente, el retorno por redirección también vuelve a ese acceso. La contraseña local no reemplaza el rol de administrador de Firebase. Al crear una partida, comparte el código y pulsa **Iniciar** desde el panel.
-4. Un invitado anónimo solo tiene identidad en ese navegador. Vincularlo a una cuenta Google nueva para Firebase conserva su UID; si la cuenta Google ya tenía un historial, se recupera ese historial sin fusionar ambos automáticamente.
+3. Para administrar, abre **Panel de administración** en la pantalla principal o en la ayuda inicial e introduce la contraseña compartida. En modo Firebase, el juego autentica la identidad pública fija `chrono-shift-admin@chrono-shift-lab.firebaseapp.com` mediante Email/Password en una app Firebase separada, usa persistencia `NONE` y comprueba `/admins/{uid}: true` antes de desbloquear el panel. La contraseña no se guarda en el navegador, en `localStorage` ni en este repositorio. Al crear una partida, comparte el código y pulsa **Iniciar** desde el panel.
+4. Un invitado anónimo solo tiene identidad en ese navegador. Google es opcional para jugadores y no se usa como paso de administración; la identidad/UID de jugador y su progreso permanecen separados de la sesión administrativa.
 
 La práctica local no implica guardado en la nube.
 
@@ -23,17 +23,16 @@ La práctica local no implica guardado en la nube.
 
 Existe una sola sala activa global en `match/state`. `players/{uid}` mantiene un único registro por UID con puntuación y niveles superados; no se conserva un archivo histórico de partidas. El snapshot JSON conserva nivel, movimientos, clones, posiciones, bloques, bucle y tiempo empleado. Los arrays vacíos también se conservan dentro del JSON.
 
-Solo un UID autorizado en `/admins` puede gestionar la partida. Cada jugador solo puede escribir su propio registro y los usuarios autenticados pueden leer el ranking. El código de acceso no sustituye a las reglas de seguridad. Las puntuaciones se calculan en el cliente, por lo que no hay protección antifraude de competición.
+Solo un UID autorizado en `/admins` puede gestionar la partida. La autenticación administrativa usa una app Firebase nombrada y su propio `adminDb`; no sustituye la autenticación ni el UID de jugadores. Cada jugador solo puede escribir su propio registro y los usuarios autenticados pueden leer el ranking. El código de acceso no sustituye a las reglas de seguridad. Las puntuaciones se calculan en el cliente, por lo que no hay protección antifraude de competición.
 
-## Verificación realizada
+## Pruebas automatizadas
 
-En el sitio publicado se comprobó la conexión real a Firebase, el acceso Google y el rol administrador, la creación e inicio de una partida y el ingreso por código desde otra pestaña. Después de mover y crear un clon, recargar y reingresar recuperó un clon en el bucle 2. Completar el primer nivel produjo 931 puntos, visibles en tiempo real en la pestaña de administración.
-
-Estas comprobaciones se hicieron con pestañas y recargas del navegador, no con dos computadores físicos. También pasaron las pruebas de sintaxis/configuración, comportamiento y reglas en el emulador RTDB:
+La validación automatizada cubre sintaxis/configuración, comportamiento del juego y progreso, separación entre las sesiones de jugador y administrador, errores de contraseña/rol, límites de espera, reintentos y reglas seguras de RTDB:
 
 ```sh
 node tests/smoke.test.js
 node tests/behavior.test.js
+node tests/firebase-auth.test.js
 npx firebase-tools@13.35.1 emulators:exec --only database --project demo-chrono-shift 'node tests/rtdb-emulator.test.js'
 ```
 
