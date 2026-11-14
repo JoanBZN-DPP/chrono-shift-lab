@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>The Chrono Shift Lab</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(#0d1530,#04060f);color:#cfe;font-family:"Courier New",monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:12px}
+h1{margin:4px 0;color:#0ff;letter-spacing:4px;text-shadow:0 0 12px #0ff;font-size:24px}
+#lv button,.b{background:#07112a;color:#0ff;border:1px solid #0ff;padding:7px 12px;margin:3px;font:inherit;cursor:pointer;box-shadow:0 0 8px #0ff4}
+#lv button.on{background:#0ff;color:#012}.b:hover,#lv button:hover{box-shadow:0 0 14px #0ff}
+#hud{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;margin:6px;font-size:16px}
+#hud span b{color:#ff2bd6;text-shadow:0 0 8px #ff2bd6}
+canvas{max-width:100%;border:2px solid #0ff;box-shadow:0 0 24px #0ff6;image-rendering:pixelated;background:#05081a}
+#info{color:#9bd;margin:6px;text-align:center;max-width:720px;min-height:40px}#msg{color:#ff5470;min-height:22px}
+#ov{position:fixed;inset:0;background:#000d;display:flex;align-items:center;justify-content:center;z-index:9}
+#ov>div{background:#060b1f;border:2px solid #0ff;box-shadow:0 0 30px #0ff8;padding:22px;max-width:640px;line-height:1.5;max-height:92vh;overflow:auto}
+#ov h2{color:#ff2bd6;margin-top:0}#ov li{margin:3px 0}.k{color:#ffe600}
+#row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:flex-start;width:100%}
+#row canvas{max-width:calc(100vw - 24px);height:auto}
+#lb{width:250px;max-height:420px;overflow:auto;background:#060b1f;border:1px solid #0ff;padding:8px;font-size:13px;line-height:1.6}
+.me{color:#ffe600;font-weight:bold}#lv button:disabled{opacity:.3;cursor:not-allowed}
+#tm{font-size:22px}#ov table{border-collapse:collapse;font-size:13px}#ov td{padding:2px 8px;border-bottom:1px solid #123}#ov input{background:#02050f;color:#0ff;border:1px solid #0ff;padding:7px;font:inherit}
+body{padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(12px,env(safe-area-inset-bottom))}
+#ov label{display:block;margin:8px 0;color:#9bd}#ov input{max-width:100%}
+.admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin:12px 0}
+.admin-grid label{margin:4px 0}.admin-grid input{width:100%;margin-top:4px}
+.admin-levels{max-height:260px;overflow:auto;border:1px solid #124;margin:8px 0}
+.admin-levels table{width:100%;text-align:left}.admin-levels th{position:sticky;top:0;background:#060b1f;color:#0ff}
+.admin-levels input{width:65px}.admin-note{font-size:12px;color:#9bd}
+.panel-close{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:10;background:#711433;color:#fff;border:2px solid #ff5470;font-weight:bold;box-shadow:0 0 16px #ff5470}
+.panel-close:hover{background:#a21d48;box-shadow:0 0 20px #ff5470}
+</style></head><body>
+<h1>THE CHRONO SHIFT LAB</h1>
+<div id="lv"></div>
+<div id="hud"><span>Movimientos: <b id="mv"></b></span><span>Clones activos: <b id="cl"></b></span><span>Bucle: <b id="lp"></b></span><span>⏱ <b id="tm">15:00</b></span><span>Puntos: <b id="sc">0</b></span><span id="net"></span></div>
+<div id="row"><canvas id="cv"></canvas><div id="lb"></div></div>
+<div id="info"></div><div id="msg"></div>
+<div><button class="b" onclick="loopEnd()">Reiniciar Bucle (R)</button><button class="b" onclick="discard()">Descartar Bucle (Z)</button><button class="b" onclick="load(li)">Reiniciar Nivel (N)</button><button class="b" onclick="help()">Ayuda</button><button class="b" title="Disponible también mientras practicas; no necesitas ser administrador" onclick="lobby()">🌐 Partidas / Unirme</button><button class="b" id="admb" style="display:none" onclick="adminGate()">🛠 Panel Admin</button></div>
+<div id="ov"></div>
+<button class="b panel-close" type="button" onclick="closePanels()" aria-label="Cerrar todos los paneles superpuestos">✕ Cerrar paneles</button>
+<script src="./peerjs.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+<script src="./firebase-config.js"></script>
+<script>
+const $=i=>document.getElementById(i),cv=$('cv'),ctx=cv.getContext('2d');
+const BT={'>':[1,0],'<':[-1,0],'^':[0,-1],v:[0,1]},V={U:[0,-1],D:[0,1],L:[-1,0],R:[1,0]},COL={a:'#ffe600',b:'#ff2bd6',c:'#00ff9d',d:'#ff8a00',f:'#4dc3ff',g:'#b6ff3d',h:'#ff5470'},S=56;
+// Mapa: # muro, S inicio, E salida, a-d placas, A-D puertas (abren con TODAS las placas de su letra), K bloque
+const cor=(w,r2,T,B)=>{const R=o=>{const s=Array(w).fill('#');for(const k in o)s[k]=o[k];return s.join('')};return['#'.repeat(w),R(T),r2,R(B),'#'.repeat(w)]};
+const rw=(w,o)=>{const r=Array(w).fill('.');r[0]=r[w-1]='#';for(const k in o)r[k]=o[k];return r.join('')};
+const LV=[
+{n:'1 · Primer Eco',t:'Un clon puede sostener la placa amarilla mientras tú cruzas la puerta.',m:8,c:1,L:[],
+map:['#########','#S..#...#','#.a.A..E#','#...#...#','#########']},
+{n:'2 · Escudo Temporal',t:'El láser se apaga mientras la placa magenta esté pisada. Los clones son inmunes y bloquean el rayo.',m:12,c:2,L:[{x:5,y:0,d:'D',p:'b'}],
+map:['#########','#.......#','#Sb....E#','#.......#','#########']},
+{n:'3 · Doble Cerrojo',t:'La puerta exige DOS placas a la vez. Más allá, otra placa apaga el láser de la salida.',m:8,c:3,L:[{x:7,y:0,d:'D',p:'b'}],
+map:['###########','#.a.#.....#','#S..A....E#','#.a.#.b...#','###########']},
+{n:'4 · Cadena Sincrónica',t:'Cada clon abre el camino del siguiente. Las puertas se cierran de golpe: cuenta cada segundo (11 movimientos).',m:11,c:3,L:[{x:6,y:0,d:'D',p:'c'}],
+map:['#############','#.a.#..b#...#','#S..A...B..E#','#.c.#...#...#','#############']},
+{n:'5 · Paradoja Final',t:'Un bloque puede sustituir a un clon. Tres clones, cuatro puertas de tiempo y 13 movimientos exactos.',m:13,c:3,L:[{x:6,y:0,d:'D',p:'c'}],
+map:['#############','#.aa#..b#...#','#S..A...B..E#','#.Kc#...#...#','#############']},
+{n:'6 · Relevo',t:'Tres trabajos, solo dos clones: un clon debe sostener una placa y después correr a otra. Sincroniza cada puerta al tick.',m:11,c:2,L:[],
+map:cor(14,'#S..A..B..C.E#',{2:'a',8:'c'},{2:'b'})},
+{n:'7 · Cierre Doble',t:'Puertas con dos placas simultáneas, relevos en pareja y un láser final. 13 movimientos, ni uno más.',m:13,c:3,L:[{x:11,y:1,d:'D',p:'c'}],
+map:cor(15,'#S...A..B....E#',{2:'a',3:'b'},{2:'a',3:'b',10:'c'})},
+{n:'8 · Cuatro Compuertas',t:'Cada puerta depende de un clon que debe haber llegado antes. Si una sola entrada se retrasa un tick, todo se desmorona.',m:16,c:4,L:[{x:13,y:1,d:'D',p:'c'}],
+map:cor(18,'#S...A..B..C..D.E#',{2:'a',3:'b',9:'c'},{2:'a',3:'b',12:'d'})},
+{n:'9 · Tormenta de Relevos',t:'Ocho placas, cuatro clones. Cada uno sostiene una puerta, la suelta justo a tiempo y corre a la siguiente.',m:17,c:4,L:[{x:14,y:1,d:'D',p:'d'}],
+map:cor(17,'#S...A..B..C.D.E#',{2:'a',3:'b',9:'c',10:'d'},{2:'a',3:'b',9:'c',10:'d'})},
+{n:'10 · Paradoja Maestra',t:'Triple relevo, dos láseres y cinco puertas. Los mismos clones deben servir tres veces. Calcula cada segundo.',m:17,c:4,L:[{x:13,y:1,d:'D',p:'f'},{x:15,y:1,d:'D',p:'d'}],
+map:cor(18,'#S...A..B..CF.D.E#',{2:'a',3:'b',4:'f',9:'c',10:'d'},{2:'a',3:'b',4:'f',9:'c',10:'d'})},
+{n:'11 · Portales',t:'NUEVO: los portales numerados te teletransportan a su pareja, incluso a través de muros.',m:8,c:1,L:[],
+map:cor(11,'#S..1#1.AE#',{7:'a'},{})},
+{n:'12 · Atajo Temporal',t:'Un portal permite a un clon llegar a una placa que ninguna puerta le deja alcanzar. Tres trabajos, dos clones.',m:11,c:2,L:[],
+map:cor(13,'#S..A..B..CE#',{2:'a',6:'b'},{3:'1',8:'1',9:'c'})},
+{n:'13 · Doble Salto',t:'Dos parejas de portales, puertas con doble placa y dos láseres que se apagan solo si cada clon llega a tiempo.',m:14,c:3,L:[{x:9,y:1,d:'D',p:'c'},{x:13,y:1,d:'D',p:'b'}],
+map:cor(16,'#S...A..B...C.E#',{2:'a',3:'1',7:'b',10:'1',11:'c'},{2:'a',3:'2',10:'2',11:'c'})},
+{n:'14 · Salto de Rana',t:'Cada clon sostiene una puerta y salta con un portal para sostener la siguiente. Dos clones, cuatro puertas.',m:17,c:2,L:[{x:9,y:1,d:'D',p:'c'},{x:17,y:1,d:'D',p:'d'}],
+map:cor(20,'#S..A...B...C...D.E#',{2:'a',6:'b'},{3:'1',7:'2',10:'1',11:'c',14:'2',15:'d'})},
+{n:'15 · Parejas Cuánticas',t:'Puertas dobles, tres portales y tres clones. El orden de grabación lo es todo.',m:17,c:3,L:[{x:9,y:1,d:'D',p:'c'},{x:17,y:1,d:'D',p:'d'}],
+map:cor(20,'#S..A...B...C...D.E#',{2:'a',3:'1',6:'b',10:'1',11:'c'},{2:'a',3:'2',7:'3',10:'2',11:'c',14:'3',15:'d'})},
+{n:'16 · Relevo Dimensional',t:'Cinco puertas, dos clones y un láser que solo se apaga el tick exacto en que llegas.',m:21,c:2,L:[{x:13,y:1,d:'D',p:'d'},{x:17,y:1,d:'D',p:'f'}],
+map:cor(24,'#S..A...B...C...D...F.E#',{2:'a',6:'b',9:'3',18:'3',19:'f'},{3:'1',7:'2',10:'1',11:'c',14:'2',15:'d'})},
+{n:'17 · Tres Saltarines',t:'Ocho placas, tres clones, cinco portales. Cada clon sostiene, suelta y salta dos veces.',m:21,c:3,L:[{x:13,y:1,d:'D',p:'d'},{x:17,y:1,d:'D',p:'f'}],
+map:cor(24,'#S..A...B...C...D...F.E#',{2:'a',3:'1',6:'b',9:'4',10:'1',11:'c',18:'4',19:'f'},{2:'a',3:'2',7:'3',9:'5',10:'2',11:'c',14:'3',15:'d',18:'5',19:'f'})},
+{n:'18 · Maratón Temporal',t:'Siete puertas, tres clones, tres láseres. Un maratón de 29 movimientos sin un solo tick de sobra.',m:29,c:3,L:[{x:17,y:1,d:'D',p:'f'},{x:21,y:1,d:'D',p:'g'},{x:25,y:1,d:'D',p:'h'}],
+map:cor(32,rw(32,{1:'S',4:'A',8:'B',12:'C',16:'D',20:'F',24:'G',28:'H',30:'E'}),{2:'a',6:'b',9:'9',13:'7',22:'9',23:'g',26:'7',27:'h'},{3:'1',7:'2',10:'c',14:'1',15:'d',18:'2',19:'f'})},
+{n:'19 · Doble Salto Mortal',t:'Seis puertas con solo dos clones: cada uno debe saltar tres veces. La precisión es absoluta.',m:25,c:2,L:[{x:17,y:1,d:'D',p:'f'},{x:21,y:1,d:'D',p:'g'}],
+map:cor(28,rw(28,{1:'S',4:'A',8:'B',12:'C',16:'D',20:'F',24:'G',26:'E'}),{2:'a',6:'b',9:'3',13:'6',18:'3',19:'f',22:'6',23:'g'},{3:'1',7:'2',10:'1',11:'c',14:'2',15:'d'})},
+{n:'20 · Singularidad',t:'Cuatro clones, portales cruzados, puertas dobles y tres láseres. La paradoja definitiva.',m:29,c:4,L:[{x:17,y:1,d:'D',p:'f'},{x:21,y:1,d:'D',p:'g'},{x:25,y:1,d:'D',p:'h'}],
+map:cor(32,rw(32,{1:'S',4:'A',8:'B',12:'C',16:'D',20:'F',24:'G',28:'H',30:'E'}),{2:'a',3:'1',5:'8',6:'b',9:'9',13:'7',14:'1',15:'d',22:'9',23:'g',26:'7',27:'h'},{2:'a',3:'2',5:'2',6:'b',7:'3',10:'c',13:'8',14:'d',18:'3',19:'f',26:'h'})},
+{n:'21 · Cinta Rápida',t:'NUEVO: las cintas (flechas azules) te empujan una casilla extra al pisarlas. Úsalas para ganar tiempo.',m:5,c:0,L:[],
+map:cor(10,'#S.>>>..E#',{},{})},
+{n:'22 · Contracorriente',t:'Una cinta hacia atrás te devuelve, salvo que algo (un clon) ocupe la casilla de detrás: entonces no puede arrastrarte.',m:6,c:1,L:[],
+map:cor(9,'#S..<..E#',{},{})},
+{n:'23 · Cinta y Cerrojo',t:'Un clon sostiene la placa mientras tú aceleras por las cintas tras la puerta.',m:8,c:1,L:[],
+map:cor(12,'#S..A..>>.E#',{2:'a'},{})},
+{n:'24 · Ancla y Cerrojo',t:'Un clon ancla la cinta, otro sostiene la placa. Calcula el orden de grabación.',m:9,c:2,L:[],
+map:cor(12,'#S..<..A..E#',{5:'a'},{})},
+{n:'25 · Doble Compuerta',t:'Tres clones: ancla, primera placa y segunda placa. Tú cruzas todo al final.',m:11,c:3,L:[],
+map:cor(14,'#S..<..A..B.E#',{5:'a'},{8:'b'})},
+{n:'26 · Relevo Veloz',t:'Dos placas, dos puertas y una cinta final que te regala el tick que necesitas.',m:11,c:2,L:[],
+map:cor(14,'#S..A..B.>>.E#',{2:'a'},{6:'b'})},
+{n:'27 · Doble Ancla',t:'Dos cintas hacia atrás y dos clones que deben quedarse justo detrás de cada una.',m:9,c:2,L:[],
+map:cor(12,'#S..<..<..E#',{},{})},
+{n:'28 · Salto de Cinta',t:'Ancla la cinta de retroceso y aprovecha la cinta de avance para llegar con el tiempo justo.',m:9,c:1,L:[],
+map:cor(13,'#S..<..>>..E#',{},{})},
+{n:'29 · Doble Marea',t:'Dos anclas, una placa y una puerta. Cada clon depende del anterior.',m:11,c:3,L:[],
+map:cor(14,'#S..<..<..A.E#',{8:'a'},{})},
+{n:'30 · La Gran Marea',t:'Todo junto: anclas, placa, puerta y cinta final. 12 movimientos exactos.',m:12,c:3,L:[],
+map:cor(16,'#S..<..<..A>>.E#',{8:'a'},{})}];
+let li=0,PO={},lv,g,W,H,M,MC,start,blocks0,plates,recs,cur,t,P,clones,blocks,open,beams,state,loopN,dead,tk=0,flash=0;
+function load(i,restore){if(MP.over){showFinal();return}if(i!=MP.curLv){MP.curLv=i;MP.lvT=serverNow()}li=i;lv=LV[i];g=lv.map.map(r=>r.split(''));H=g.length;W=g[0].length;M=lv.m;MC=lv.c;blocks0=[];plates={};PO={};
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=g[y][x];
+  if(c=='S'){start={x,y};g[y][x]='.'}
+  if(c=='K'){blocks0.push({x,y});g[y][x]='.'}
+  if('abcdfgh'.includes(c))(plates[c]=plates[c]||[]).push({x,y});if('123456789'.includes(c))(PO[c]=PO[c]||[]).push({x,y})}
+ const rules=levelRules(i);M=rules.m;MC=rules.c;cv.width=W*S;cv.height=H*S;recs=[];loopN=1;newLoop(false);
+ $('info').textContent=lv.t;
+ $('lv').innerHTML=LV.map((l,k)=>`<button class="${k==i?'on':''}" ${MP.run&&k>MP.solved?'disabled':''} onclick="load(${k})">${k+1}</button>`).join('');
+ $('ov').style.display='none';if(restore&&stableProgress(restore))restoreProgress(restore);scheduleSave()}
+function progressSnapshot(){return{level:li,moves:Array.isArray(cur)?cur.slice(0,120):[],clones:Array.isArray(recs)?recs.map(x=>x.slice(0,120)):[],t:Number(t)||0,position:P?{...P}:null,clonePositions:Array.isArray(clones)?clones.map(x=>({...x})):[],blocks:Array.isArray(blocks)?blocks.map(x=>({...x})):[],loop:Number(loopN)||1,lvT:Number(MP.lvT)||serverNow(),state:['play','end','dead','win'].includes(state)?state:'play'}}
+function restoreProgress(s){s=decodeProgress(s);if(!stableProgress(s)||Number(s.level)!==li)return false;const point=p=>p&&Number.isInteger(p.x)&&Number.isInteger(p.y)&&p.x>=0&&p.x<W&&p.y>=0&&p.y<H;if(!point(s.position)||![...s.clonePositions,...s.blocks].every(point))return false;cur=s.moves.slice(0,120);recs=s.clones.map(x=>x.slice(0,120));t=Math.max(0,Math.min(M,Number(s.t)||0));P={...s.position};clones=s.clonePositions.map(x=>({...x}));blocks=s.blocks.map(x=>({...x}));loopN=Math.max(1,Number(s.loop)||1);MP.lvT=Number(s.lvT)||MP.lvT;state=['play','end','dead','win'].includes(s.state)?s.state:'play';calc();hud();if(state==='dead')newLoop(false);else if(state==='end')newLoop(true);else if(state==='win')later(win,0);return true}
+let saveTimer=null;function scheduleSave(){if(!MP.run||!MP.joined||!MT)return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>savePlayer(),350)}
+function newLoop(add){tk++;if(add){recs.push(cur);if(recs.length>MC)recs.shift();loopN++}
+ cur=[];t=0;P={...start};clones=recs.map(()=>({...start}));blocks=blocks0.map(b=>({...b}));open={};calc();state=MP.over?'over':'play';$('msg').textContent='';hud();scheduleSave()}
+function later(f,ms){const k=tk;setTimeout(()=>{if(k==tk)f()},ms)}
+function solid(x,y){if(x<0||y<0||x>=W||y>=H)return 1;const c=g[y][x];if(c=='#')return 1;return('ABCDFGH'.includes(c)&&!open[c])?1:0}
+const hasB=(x,y)=>blocks.some(b=>b.x==x&&b.y==y),hasC=(x,y)=>clones.some(c=>c.x==x&&c.y==y);
+function pressed(l){const a=plates[l];return !!a&&a.every(p=>hasB(p.x,p.y)||hasC(p.x,p.y)||(P.x==p.x&&P.y==p.y))}
+function calc(){for(const l of 'abcdfgh')open[l.toUpperCase()]=pressed(l);dead=false;beams=[];
+ const c=g[P.y][P.x];if('ABCDFGH'.includes(c)&&!open[c])dead=true; // aplastado por puerta
+ for(const l of lv.L){if(l.p&&pressed(l.p))continue;let x=l.x,y=l.y,ex=x,ey=y;const[dx,dy]=V[l.d];
+  for(;;){const nx=x+dx,ny=y+dy;if(solid(nx,ny))break;x=nx;y=ny;ex=x;ey=y;
+   if(hasB(x,y)||hasC(x,y))break;if(P.x==x&&P.y==y){dead=true;break}}
+  beams.push({x:l.x,y:l.y,ex,ey})}}
+function mv(o,a){if(a=='W')return;const[dx,dy]=V[a],nx=o.x+dx,ny=o.y+dy;if(solid(nx,ny))return;
+ const b=blocks.find(b=>b.x==nx&&b.y==ny);
+ if(b){const tx=nx+dx,ty=ny+dy;if(solid(tx,ty)||hasB(tx,ty)||g[ty][tx]=='E'||PO[g[ty][tx]]||hasC(tx,ty)||(P.x==tx&&P.y==ty))return;b.x=tx;b.y=ty}
+ o.x=nx;o.y=ny;const q=PO[g[ny][nx]];if(q){const r=q.find(p=>p.x!=nx||p.y!=ny);if(r){o.x=r.x;o.y=r.y}}
+ const bt=BT[g[o.y][o.x]];if(bt){const sx=o.x+bt[0],sy=o.y+bt[1];if(!solid(sx,sy)&&!hasB(sx,sy)&&!hasC(sx,sy)){o.x=sx;o.y=sy}}}
+function step(a){if(state!='play')return;cur.push(a);t++;
+ clones.forEach((c,i)=>mv(c,recs[i][t-1]||'W'));mv(P,a);calc();hud();
+ if(dead){state='dead';scheduleSave();flash=1;$('msg').textContent='☠ Eliminado: este bucle se descarta.';later(()=>newLoop(false),800);return}
+ if(g[P.y][P.x]=='E'){state='win';scheduleSave();later(win,350);return}
+ if(t>=M){state='end';scheduleSave();$('msg').textContent='Movimientos agotados: el tiempo se reinicia...';later(()=>newLoop(true),500)}}
+function loopEnd(){if(state=='play')newLoop(true)}
+function discard(){if(state=='play')newLoop(false)}
+function hud(){$('mv').textContent=M-t;$('cl').textContent=recs.length+' / '+MC;$('lp').textContent=loopN;$('sc').textContent=MP.score}
+function ov(h){const o=$('ov');o.innerHTML='<div>'+h+'</div>';o.style.display='flex'}
+function winSolo(){ov(li<LV.length-1?`<h2>¡NIVEL COMPLETADO!</h2><p>Lo lograste con ${recs.length} clon(es) en el bucle ${loopN}.</p><button class="b" onclick="load(${li+1})">Siguiente nivel ▶</button><button class="b" onclick="load(li)">Repetir</button>`
+ :`<h2>¡PARADOJA RESUELTA!</h2><p>Has completado The Chrono Shift Lab. La línea temporal está a salvo... por ahora.</p><button class="b" onclick="load(0)">Jugar de nuevo</button>`)}
+function help(){ov(`<h2>THE CHRONO SHIFT LAB</h2>
+<p>Llega a la <b style="color:#0ff">salida</b>. Al acabarse los movimientos o pulsar <span class="k">R</span>, el bucle se reinicia y un <b style="color:#c9f">clon</b> repite tus acciones para ayudarte.</p>
+<ul><li><span class="k">Flechas / WASD</span>: moverte y empujar bloques · <span class="k">Espacio</span>: esperar.</li>
+<li><span class="k">R</span>: crear un clon · <span class="k">Z</span>: reiniciar sin clon · <span class="k">N</span>: reiniciar nivel.</li>
+<li>Las placas abren las puertas del mismo color mientras tú, un clon o un bloque las pise; activa todas si hay varias.</li>
+<li>Evita láseres y puertas que se cierren sobre ti. Clones y bloques bloquean los láseres.</li>
+<li>En los niveles 11–20, los portales con el mismo número forman parejas; en los niveles 21–30, las cintas te empujan una casilla extra.</li>
+<li><b>Administración</b>: en el primer uso, el anfitrión debe crear una contraseña de al menos 8 caracteres.</li></ul>
+<button class="b" onclick="document.getElementById('ov').style.display='none'">Practicar</button><button class="b" onclick="lobby()">🎮 Unirme a una partida</button>`)}
+addEventListener('keydown',e=>{if($('ov').style.display!='none')return;const k=e.key.toLowerCase();
+ const m={arrowup:'U',w:'U',arrowdown:'D',s:'D',arrowleft:'L',a:'L',arrowright:'R',d:'R',' ':'W'}[k];
+ if(m){e.preventDefault();step(m)}else if(k=='r')loopEnd();else if(k=='z')discard();else if(k=='n')load(li)});
+function glow(c,b){ctx.shadowColor=c;ctx.shadowBlur=b;ctx.fillStyle=c;ctx.strokeStyle=c}
+function draw(ts){ctx.clearRect(0,0,cv.width,cv.height);const pl=.5+.5*Math.sin(ts/250);ctx.shadowBlur=0;
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){const c=g[y][x],px=x*S,py=y*S;ctx.shadowBlur=0;
+  if(c=='#'){ctx.fillStyle='#10193a';ctx.fillRect(px,py,S,S);ctx.strokeStyle='#1e2f6b';ctx.strokeRect(px+2,py+2,S-4,S-4);continue}
+  ctx.fillStyle=(x+y)%2?'#080e24':'#0a1230';ctx.fillRect(px,py,S,S);
+  if(BT[c]){const d=BT[c],a=Math.atan2(d[1],d[0]),o=((ts/150)%3)/3;glow('#4dc3ff',6);ctx.lineWidth=3;for(let k=0;k<3;k++){const f=(k+o)/3-.5,cx=px+S/2+d[0]*f*S*.8,cy=py+S/2+d[1]*f*S*.8;ctx.beginPath();ctx.moveTo(cx-Math.cos(a-.6)*9,cy-Math.sin(a-.6)*9);ctx.lineTo(cx,cy);ctx.lineTo(cx-Math.cos(a+.6)*9,cy-Math.sin(a+.6)*9);ctx.stroke()}ctx.shadowBlur=0}
+  if('123456789'.includes(c)){const hu=(+c*47)%360;ctx.strokeStyle='hsl('+hu+',100%,60%)';ctx.shadowColor=ctx.strokeStyle;ctx.shadowBlur=14;ctx.lineWidth=3;for(let k=0;k<3;k++){ctx.beginPath();ctx.arc(px+S/2,py+S/2,6+k*6+pl*3,ts/300+k,ts/300+k+4.2);ctx.stroke()}ctx.shadowBlur=0;ctx.fillStyle=ctx.strokeStyle;ctx.font='bold 12px monospace';ctx.textAlign='center';ctx.fillText(c,px+S/2,py+S/2+4)}
+  if('abcdfgh'.includes(c)){const on=pressed(c);glow(COL[c],on?18:6);ctx.lineWidth=3;ctx.strokeRect(px+10,py+10,S-20,S-20);if(on)ctx.fillRect(px+15,py+15,S-30,S-30)}
+  if(c=='E'){glow('#0ff',10+pl*20);ctx.lineWidth=3;ctx.beginPath();ctx.arc(px+S/2,py+S/2,14+pl*6,0,7);ctx.stroke();ctx.beginPath();ctx.arc(px+S/2,py+S/2,7,0,7);ctx.fill()}
+  if('ABCDFGH'.includes(c)){const col=COL[c.toLowerCase()];glow(col,12);ctx.lineWidth=2;
+   if(open[c]){ctx.globalAlpha=.5;ctx.strokeRect(px+4,py+4,S-8,S-8);ctx.globalAlpha=1}
+   else{ctx.fillRect(px+8,py+3,S-16,S-6);ctx.fillStyle='#000a';for(let i=0;i<4;i++)ctx.fillRect(px+8,py+10+i*12,S-16,3)}}}
+ ctx.shadowBlur=0;ctx.lineWidth=1;
+ for(const l of lv.L){ctx.shadowBlur=0;ctx.fillStyle='#401018';ctx.fillRect(l.x*S+4,l.y*S+4,S-8,S-8);
+  const on=!(l.p&&pressed(l.p));glow(on?'#ff3355':'#553',on?14:0);ctx.fillRect(l.x*S+18,l.y*S+18,S-36,S-36)}
+ for(const b of beams){glow('#ff3355',16);ctx.globalAlpha=.7+.3*pl;ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(b.x*S+S/2,b.y*S+S/2);ctx.lineTo(b.ex*S+S/2,b.ey*S+S/2);ctx.stroke();ctx.globalAlpha=1}
+ for(const b of blocks){glow('#ff8a00',10);ctx.fillRect(b.x*S+8,b.y*S+8,S-16,S-16);ctx.fillStyle='#4a2500';ctx.fillRect(b.x*S+16,b.y*S+16,S-32,S-32)}
+ clones.forEach((c,i)=>{glow('#b36bff',14);ctx.globalAlpha=.65;ctx.fillRect(c.x*S+12,c.y*S+12,S-24,S-24);ctx.globalAlpha=1;ctx.shadowBlur=0;ctx.fillStyle='#fff';ctx.font='bold 16px monospace';ctx.textAlign='center';ctx.fillText(i+1,c.x*S+S/2,c.y*S+S/2+6)});
+ glow(state=='dead'?'#f35':'#0ff',16);ctx.fillRect(P.x*S+12,P.y*S+12,S-24,S-24);ctx.shadowBlur=0;ctx.fillStyle='#012';ctx.fillRect(P.x*S+19,P.y*S+21,6,6);ctx.fillRect(P.x*S+31,P.y*S+21,6,6);
+ if(flash>0){ctx.fillStyle=`rgba(255,40,70,${flash*.35})`;ctx.fillRect(0,0,cv.width,cv.height);flash-=.03}
+ requestAnimationFrame(draw)}
+// ===== MODO ONLINE (30 jugadores · 15 min · ranking) =====
+const MP={joined:false,run:false,over:false,solved:0,score:0,name:'',id:'local',curLv:-1,lvT:0,seen:'',host:false,adminUnlocked:false,firebaseAdmin:false,lob:false,fin:false,mid:null,ph:'',err:'',roomCode:'',pendingProgress:null};
+let db=null,usr=null,MT=null,PL=[],firebaseApp=null,serverOffset=0;
+let p2pHost=null,p2pGuest=null,p2pConn=null,p2pConnections=new Map(),lastPeerSync=0;
+const ROOM_PREFIX='chronoshift-';
+function closePanels(){MP.lob=false;MP.adm=false;if(phase()==='count'&&MT)MP.seen=MT.id+'c';$('ov').style.display='none'}
+function localPlayerId(){try{let id=localStorage.getItem('chrono-player-id-v1');if(!id){id='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);localStorage.setItem('chrono-player-id-v1',id)}return id}catch(e){return'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,10)}}
+const roomPeerId=code=>ROOM_PREFIX+String(code).toLowerCase();
+function p2pSend(conn,msg){try{if(conn&&conn.open)conn.send(msg)}catch(e){}}
+function p2pState(){return{type:'state',match:MT,players:PL}}
+function p2pBroadcast(){if(!p2pHost)return;const packet=p2pState();for(const conn of p2pConnections.values())p2pSend(conn,packet);lastPeerSync=Date.now()}
+function p2pHostMessage(conn,msg){if(!msg||typeof msg!=='object')return;
+ if(msg.type==='join'){
+  const id=String(msg.id||'').slice(0,48),name=String(msg.name||'').trim().slice(0,16),ph=phase();
+  if(!id||!name||!MT||!['lobby','count','run'].includes(ph)){p2pSend(conn,{type:'reject',message:'La sala no está abierta para unirse.'});return}
+  if((MT.ban||[]).includes(id)){p2pSend(conn,{type:'reject',message:'Fuiste expulsado de esta partida.'});return}
+  const old=PL.find(x=>x.id===id&&x.matchId===MT.id);
+  if(!old&&ranked().length>=gameCfg().maxPlayers){p2pSend(conn,{type:'reject',message:'Sala llena ('+gameCfg().maxPlayers+'/'+gameCfg().maxPlayers+').'});return}
+  conn.chronoPlayerId=id;
+  const player={id,name,matchId:MT.id,solved:old?old.solved:0,score:old?old.score:0,t:Date.now()};
+  PL=PL.filter(x=>x.id!==id);PL.push(player);p2pSend(conn,{type:'joined',match:MT,players:PL,playerId:id});p2pBroadcast();board();if(MP.lob)lobby();return
+ }
+ if(msg.type==='score'&&conn.chronoPlayerId&&MT){const id=conn.chronoPlayerId,old=PL.find(x=>x.id===id&&x.matchId===MT.id);if(!old)return;
+  const solved=Math.max(0,Math.min(LV.length,Number(msg.player?.solved)||0)),score=Math.max(0,Math.min(100000000,Number(msg.player?.score)||0));
+  PL=PL.map(x=>x.id===id?{...x,solved,score,t:Date.now()}:x);board();p2pBroadcast();if(MP.lob)lobby()}
+}
+function p2pHostStart(code){if(!window.Peer)return Promise.reject(new Error('No se pudo cargar PeerJS.'));
+ if(p2pHost){try{p2pHost.destroy()}catch(e){}}p2pConnections.clear();
+ return new Promise((resolve,reject)=>{const peer=new Peer(roomPeerId(code),{debug:0});p2pHost=peer;let settled=false;
+  const timer=setTimeout(()=>{if(!settled){settled=true;try{peer.destroy()}catch(e){}reject(new Error('Se agotó el tiempo al abrir la sala.'))}},15000);
+  peer.on('open',()=>{if(settled)return;settled=true;clearTimeout(timer);resolve();});
+  peer.on('error',e=>{if(!settled){settled=true;clearTimeout(timer);reject(e||new Error('No se pudo abrir la sala.'))}else if(e&&e.type==='network'){$('net').textContent='⚠ Sin señalización P2P'}});
+  peer.on('connection',conn=>{p2pConnections.set(conn.peer,conn);conn.on('open',()=>p2pSend(conn,p2pState()));conn.on('data',data=>p2pHostMessage(conn,data));conn.on('close',()=>{p2pConnections.delete(conn.peer);p2pBroadcast()});conn.on('error',()=>p2pConnections.delete(conn.peer))});
+ })}
+function p2pGuestMessage(packet){if(!packet||typeof packet!=='object')return;
+ if(packet.type==='reject'){MP.err=String(packet.message||'No se pudo unir a la sala.');MP.joined=false;MP.run=false;lobby();return}
+ if(packet.type!=='joined'&&packet.type!=='state')return;
+ const wasJoined=MP.joined,oldId=MT&&MT.id;MT=packet.match||null;PL=Array.isArray(packet.players)?packet.players:[];
+ if(MT&&oldId!==MT.id)onMatch();
+ if(packet.type==='joined'){MP.host=false;MP.joined=true;MP.name=MP.name||'';const me=PL.find(x=>x.id===MP.id&&x.matchId===MT?.id);MP.solved=me?Number(me.solved)||0:0;MP.score=me?Number(me.score)||0:0;MP.err='';MP.lob=true;lobby()}
+ else if(wasJoined){MP.host=false;MP.joined=true}
+ board();if(MP.lob&&packet.type!=='joined')lobby();tick()
+}
+function p2pGuestJoin(code,name){if(!window.Peer){MP.err='No se pudo cargar el servicio de salas.';lobby();return}
+ if(p2pGuest){try{p2pGuest.destroy()}catch(e){}}MP.err='Conectando con la sala…';MP.roomCode=code;MP.name=name;lobby();
+ const peer=new Peer(undefined,{debug:0});p2pGuest=peer;let failed=false,conn=null;
+ const fail=message=>{if(failed)return;failed=true;MP.err=message;MP.joined=false;MP.run=false;lobby()};
+ const timer=setTimeout(()=>{if(!conn||!conn.open)fail('No se pudo conectar. Comprueba el código y que el anfitrión siga conectado.')},18000);
+ peer.on('open',()=>{if(failed)return;conn=peer.connect(roomPeerId(code),{reliable:true,serialization:'json'});p2pConn=conn;
+  conn.on('open',()=>{clearTimeout(timer);p2pSend(conn,{type:'join',id:MP.id,name})});
+  conn.on('data',data=>p2pGuestMessage(data));
+  conn.on('error',()=>fail('Se perdió la conexión con la sala.'));
+  conn.on('close',()=>{if(MP.joined&&!MP.over){MP.err='Se perdió la conexión con el anfitrión. Vuelve a entrar con el código de sala.';MP.joined=false;MP.run=false;lobby()}})
+ });
+ peer.on('error',e=>{if(!conn||!conn.open)fail(e&&e.type==='peer-unavailable'?'No se encontró esa sala. Comprueba el código y que el anfitrión siga conectado.':'No se pudo conectar al servicio de salas.')})
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=ms=>{const s=Math.max(0,Math.ceil(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')};
+const DEFAULT_CFG={durationSec:900,countdownSec:8,maxPlayers:30,basePoints:1000,minPoints:100,timePenaltyPerMinute:100,crowdPenalty:40,moves:{},clones:{}};
+let LOCAL_CFG={...DEFAULT_CFG};
+try{LOCAL_CFG={...DEFAULT_CFG,...JSON.parse(localStorage.getItem('chrono-game-config-v1')||'{}')}}catch(e){}
+const gameCfg=()=>({...DEFAULT_CFG,...LOCAL_CFG,...(MT&&MT.settings||{})});
+function levelRules(i){const c=gameCfg();return{m:Math.max(1,Math.min(60,Number(c.moves?.[i]??LV[i].m)||LV[i].m)),c:Math.max(0,Math.min(8,Number(c.clones?.[i]??LV[i].c)||0))}}
+const ADMIN_KEY='chrono-admin-credential-v1';
+const isAdmin=()=>!!(MP.host&&MP.adminUnlocked&&(!db||MP.firebaseAdmin));
+const adminRole=(roles,uid)=>!!(uid&&roles&&roles[uid]===true);
+const serverNow=()=>nowServer();
+const decodeProgress=value=>{try{return typeof value==='string'?JSON.parse(value):value}catch(e){return null}};
+const stableProgress=p=>p&&typeof p==='object'&&Number.isInteger(Number(p.level))&&Number(p.level)>=0&&Number(p.level)<LV.length&&Array.isArray(p.moves)&&p.moves.length<=120&&p.moves.every(a=>typeof a==='string'&&'UDLRW'.includes(a)&&a.length===1)&&Array.isArray(p.clones)&&p.clones.length<=8&&p.clones.every(a=>Array.isArray(a)&&a.length<=120&&a.every(x=>typeof x==='string'&&'UDLRW'.includes(x)&&x.length===1))&&p.position&&Array.isArray(p.clonePositions)&&p.clonePositions.length===p.clones.length&&Array.isArray(p.blocks)&&Number.isFinite(Number(p.loop))&&Number.isFinite(Number(p.lvT));
+function nowServer(){return Date.now()+serverOffset}
+function phase(){const n=nowServer();if(!MT)return'none';if(!MT.startAt)return'lobby';if(n<MT.startAt)return'count';if(n<MT.endAt)return'run';return'over'}
+const ranked=()=>PL.filter(p=>MT&&p.matchId==MT.id).sort((a,b)=>b.score-a.score||a.t-b.t);
+const rows=(r,max)=>r.slice(0,max).map((p,i)=>`<div class="${p.id==MP.id?'me':''}">${['🥇','🥈','🥉'][i]||(i+1)+'.'} ${esc(p.name)} · Nv ${p.solved} · ${p.score}</div>`).join('');
+function board(){const r=ranked(),p=phase();$('lb').innerHTML='<b>🏆 Ranking ('+r.length+'/'+(MT?gameCfg().maxPlayers:30)+')</b>'+(MT?'':'<div>Sin partida activa</div>')+rows(r,30)+((!MP.joined&&MT&&p!='over')?'<br><button class="b" onclick="lobby()">Unirme</button>':'')}
+ async function netInit(){
+ const cfg=window.CHRONO_FIREBASE_CONFIG;
+ if(cfg==null){MP.id=localPlayerId();MP.host=true;MP.firebaseAdmin=false;$('net').textContent=window.Peer?'🟡 Firebase pendiente · P2P no persistente':'⚪ Firebase pendiente · práctica local';$('admb').style.display='';return}
+ try{if(!cfg.apiKey||!cfg.databaseURL||!window.firebase)throw new Error('Falta la configuración de Firebase o no cargó su SDK.');firebaseApp=firebase.initializeApp(cfg);db=firebase.database();const auth=firebase.auth();db.ref('.info/serverTimeOffset').on('value',x=>{serverOffset=Number(x.val())||0},firebaseFail);await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);await new Promise(resolve=>{const stop=auth.onAuthStateChanged(u=>{stop();resolve(u)})});let u=auth.currentUser;if(!u)u=await auth.signInAnonymously().then(r=>r.user);usr=u;MP.id=u.uid;MP.name=MP.name||u.displayName||'';const roleSnap=await db.ref('admins/'+u.uid).once('value');MP.firebaseAdmin=adminRole({[u.uid]:roleSnap.val()},u.uid);MP.host=MP.firebaseAdmin;
+  db.ref('match/state').on('value',x=>{MT=x.exists()?x.val():null;onMatch()},firebaseFail);db.ref('players').on('value',x=>{const v=x.val()||{};PL=Object.entries(v).map(([id,y])=>({id,...y}));board();if(MP.lob)lobby();admUp();if(MP.over&&MP.fin&&!MP.adm)showFinal()},firebaseFail);db.ref('.info/connected').on('value',x=>{$('net').textContent=x.val()?'🟢 Firebase RTDB':'🟡 Firebase reconectando…'});$('admb').style.display='';
+ }catch(e){firebaseFail(e);usr=null;MP.err='Firebase configurado pero desconectado: '+(e.message||e.code||'error');$('net').textContent='🔴 Firebase desconectado (sin fallback P2P)';$('admb').style.display='';}
+ }
+ function firebaseFail(e){$('net').textContent='🔴 Firebase desconectado';MP.err='Firebase no disponible; la práctica local permanece activa, pero la nube está desconectada.';if(e&&e.code)console.warn('Firebase:',e.code)}
+ async function signInGoogle(){if(!firebaseApp){MP.err='Google requiere Firebase configurado.';lobby();return}const provider=new firebase.auth.GoogleAuthProvider();try{const a=firebase.auth();if(a.currentUser&&a.currentUser.isAnonymous){try{await a.currentUser.linkWithPopup(provider)}catch(e){if(e.code==='auth/credential-already-in-use'||e.code==='auth/provider-already-linked'){await a.signInWithPopup(provider)}else throw e}}else await a.signInWithPopup(provider);location.reload()}catch(e){MP.err='No se pudo iniciar sesión con Google: '+(e.message||e.code||'error')+'. El progreso anónimo no se fusiona automáticamente.';lobby()}}
+function onMatch(){if(MT&&MP.mid!=MT.id){MP.mid=MT.id;MP.joined=false;MP.run=false;MP.over=false;MP.fin=false;MP.solved=0;MP.score=0;MP.curLv=-1;MP.seen=''}tick();board();if(MP.lob)lobby();admUp();if(MT&&(MT.ban||[]).includes(MP.id)&&MP.run){MP.run=false;MP.over=true;tk++;state='over';ov('<h2>Fuiste expulsado de la partida</h2>')}}
+async function setMatch(o){if(!isAdmin()){MP.err='Solo el administrador autenticado puede gestionar la partida.';return}try{if(db)await db.ref('match/state').set({...o,updatedAt:firebase.database.ServerValue.TIMESTAMP});else{MT=o;onMatch();p2pBroadcast()}}catch(e){MP.err='Solo el anfitrión puede gestionar la partida.'}}
+async function newMatch(){if(!isAdmin())return;const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',code=Array.from({length:6},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+ if(!db){try{await p2pHostStart(code)}catch(e){MP.err=e&&e.type==='unavailable-id'?'Ese código ya está ocupado. Intenta crear otra sala.':'No se pudo abrir la sala P2P. Comprueba la conexión a internet e inténtalo de nuevo.';MP.adm?adm():lobby();return}PL=[]}
+ await setMatch({id:''+Date.now(),code,startAt:null,endAt:null,ban:[],settings:gameCfg()});MP.err='';MP.adm?adm():lobby()}
+function startMatch(){if(!isAdmin()||!MT)return;const c=gameCfg(),s=serverNow()+c.countdownSec*1000;setMatch({...MT,startAt:s,endAt:s+c.durationSec*1000})}
+async function savePlayer(){if(!MT||((MT.ban||[]).includes(MP.id)))return;const progress=progressSnapshot();const o={name:MP.name,matchId:MT.id,solved:Math.max(0,Math.min(LV.length,Number(MP.solved)||0)),score:Math.max(0,Math.min(100000000,Number(MP.score)||0)),t:db?firebase.database.ServerValue.TIMESTAMP:Date.now(),progress};try{if(db)await db.ref('players/'+MP.id).update({...o,progress:JSON.stringify(progress)});else if(MP.host&&p2pHost){const i=PL.findIndex(x=>x.id===MP.id);if(i<0)PL.push({id:MP.id,...o});else PL[i]={...PL[i],...o};board();p2pBroadcast()}else if(p2pConn){p2pSend(p2pConn,{type:'score',player:o})}}catch(e){MP.err='No se pudo guardar en Firebase; se mantiene la práctica local.';$('msg').textContent=MP.err}}
+async function join(){const nm=($('nick')?.value||'').trim().slice(0,16),code=($('joinCode')?.value||'').trim().toUpperCase().replace(/\s+/g,'');if(!nm){MP.err='Escribe tu apodo para unirte a la partida.';lobby();return}if(window.CHRONO_FIREBASE_CONFIG!=null&&!db){MP.err='Firebase no está conectado. Puedes practicar, pero no abrir una sala P2P en este modo.';lobby();return}if(!db){if(!/^[A-Z0-9]{6}$/.test(code)){MP.err='Escribe el código de sala de 6 caracteres.';lobby();return}MP.host=false;await p2pGuestJoin(code,nm);return}if(!MT||!['lobby','count','run'].includes(phase())){MP.err='No hay una partida abierta para unirse. Espera a que el anfitrión la cree.';lobby();return}if(MT.code&&code!==String(MT.code).trim().toUpperCase()){MP.err='El código no coincide con la partida disponible.';lobby();return}if((MT.ban||[]).includes(MP.id)){MP.err='Fuiste expulsado de esta partida.';lobby();return}MP.name=nm;
+ let me=PL.find(x=>x.id==MP.id&&x.matchId==MT.id);if(db){const snap=await db.ref('players/'+MP.id).once('value');const remote=snap.val();if(remote&&remote.matchId===MT.id)me={id:MP.id,...remote};}
+ if(!me&&PL.filter(x=>x.matchId==MT.id).length>=gameCfg().maxPlayers){MP.err='Sala llena ('+gameCfg().maxPlayers+'/'+gameCfg().maxPlayers+')';lobby();return}
+ MP.solved=me?Number(me.solved)||0:0;MP.score=me?Number(me.score)||0:0;MP.pendingProgress=me?.progress||null;MP.joined=true;MP.err='';if(!me)await db.ref('players/'+MP.id).update({name:MP.name,matchId:MT.id,solved:0,score:0,t:firebase.database.ServerValue.TIMESTAMP});lobby();tick()}
+function lobby(){MP.lob=true;const p=phase(),n=ranked().length,d=$('nick');if(d&&d.value)MP.name=d.value;
+		 const cfg=gameCfg();let h='<h2>🌐 Sala online</h2>'+(firebaseApp?'<p><button class="b" onclick="signInGoogle()">Continuar con Google</button> <span class="admin-note">Usa la misma cuenta Google en otro equipo para recuperar tu progreso.</span></p>':'<p class="admin-note">Firebase está pendiente de configuración. El modo P2P no guarda partidas cuando el anfitrión se desconecta.</p>')+'<p>Hasta '+cfg.maxPlayers+' jugadores · '+fmt(cfg.durationSec*1000)+' · gana quien más puntos sume. Cada nivel otorga puntos según el tiempo empleado y cuántos jugadores ya lo completaron. Los niveles se superan en orden.</p>';
+		 h+=`<p>Estado: <b>${{none:'sin partida',lobby:'sala de espera',count:'comenzando',run:'en curso',over:'terminada'}[p]}</b> · Jugadores: <b>${n}/${cfg.maxPlayers}</b></p>`;
+		 if(MT&&(p=='lobby'||p=='count'||p=='run'))h+=`<div style="border:1px solid #0ff;padding:10px;margin:12px 0;text-align:left"><h3 style="color:#0ff;margin:0 0 6px">🎮 Partida disponible</h3><p>Estado: <b>${{lobby:'sala de espera',count:'cuenta atrás',run:'en curso'}[p]}</b> · ${MT.code?'Necesitas el código de acceso que comparte el administrador.':'Partida anterior sin código de acceso.'}</p><p class="admin-note">Puedes unirte aunque no seas administrador. También puedes volver a practicar mientras esperas.</p></div>`;
+		 if(!MP.joined&&((db&&['lobby','count','run'].includes(p))||(!db&&['none','lobby','count','run'].includes(p))))h+=`<label>Tu apodo<input id="nick" maxlength="16" placeholder="Tu apodo" value="${esc(MP.name)}"></label>${(!db||MT?.code)?'<label>Código de la partida<input id="joinCode" maxlength="6" minlength="6" placeholder="Ej. A7K2Q9" autocomplete="off" autocapitalize="characters" style="text-transform:uppercase"></label>':''}<button class="b" onclick="join()">🎮 Unirme a la partida</button>`;
+		 if(!MP.joined&&(p=='none'||p=='over'))h+=db?"<p>No hay una partida abierta ahora. Cuando el anfitrión la cree, podrás unirte desde aquí sin ser administrador.</p><button class=\"b\" onclick=\"join()\">🎮 Unirme a una partida</button>":"<p>Ingresa el código de sala que comparta el anfitrión. El anfitrión debe mantener el juego abierto.</p>";
+ if(MP.joined&&p=='lobby')h+='<p>✔ Estás dentro. Esperando a que el anfitrión inicie...</p>';
+ if(MP.host&&(p=='none'||p=='over'))h+='<button class="b" onclick="adminGate()">🔐 Administración / nueva partida</button>';
+ if(MP.host&&p=='lobby')h+='<button class="b" onclick="adminGate()">🔐 Abrir administración</button><p>El administrador inicia desde el panel.</p>';
+ if(!MP.host&&(p=='none'||p=='over'))h+='<p>Esperando al anfitrión...</p>';
+ if(MP.err)h+='<p style="color:#ff5470">'+esc(MP.err)+'</p>';
+ h+='<div style="max-height:25vh;overflow:auto">'+rows(ranked(),30)+'</div><br><button class="b" onclick="MP.lob=false;document.getElementById(\'ov\').style.display=\'none\'">Practicar mientras tanto</button>';
+ ov(h)}
+function tick(){const p=phase(),n=serverNow();
+	 if(!db&&MP.host&&p2pHost&&Date.now()-lastPeerSync>1500)p2pBroadcast();
+	 $('tm').textContent=p=='run'?fmt(MT.endAt-n):(p=='over'?'00:00':fmt(gameCfg().durationSec*1000));
+	 if(MP.adm&&$('at'))$('at').textContent=atime();
+	 if(p!=MP.ph){MP.ph=p;board();if(MP.lob)lobby();admUp()}
+	 if(p=='count'&&MP.joined&&!MP.adm){const remaining=Math.ceil((MT.startAt-n)/1000);if(MP.seen!=MT.id+'c'){MP.seen=MT.id+'c';MP.lob=false;ov(`<h2>¡Prepárate!</h2><p>La partida empieza en <b id="countdownRemaining">${remaining}</b> s. Tendrás ${fmt(gameCfg().durationSec*1000)}.</p>`)}else if($('countdownRemaining')&&$('ov').style.display!='none')$('countdownRemaining').textContent=remaining}
+ if(p=='run'&&MP.joined&&!MP.run&&MP.seen!=MT.id+'r'){MP.seen=MT.id+'r';startRun()}
+ if(p=='over'&&MT&&MP.seen!=MT.id+'o'){MP.seen=MT.id+'o';endRun()}}
+function startRun(){MP.adm=false;MP.over=false;MP.run=true;MP.lob=false;MP.curLv=-1;$('ov').style.display='none';if(MP.solved>=LV.length){state='win';ov('<h2>¡PARADOJA RESUELTA!</h2><p>Completaste los 30 niveles. Espera al final del tiempo para ver el ranking.</p>');return}const me=PL.find(x=>x.id===MP.id),saved=decodeProgress(MP.pendingProgress||(me&&me.progress)),finished=saved&&saved.state==='win'&&Number(saved.level)<MP.solved;const level=Math.min(Math.max(0,Number(finished?MP.solved:(saved?.level??MP.solved))||0),MP.solved,LV.length-1);load(level);if(!finished&&saved&&Number(saved.level)===li)restoreProgress(saved);MP.pendingProgress=null;scheduleSave()}
+function endRun(){MP.run=false;if(MP.joined){MP.over=true;MP.fin=true;tk++;state='over';showFinal()}}
+function showFinal(){const r=ranked(),k=r.findIndex(p=>p.id==MP.id);
+ ov('<h2>⏱ ¡Tiempo agotado!</h2><p>'+(k>=0?'Quedaste en el puesto <b>'+(k+1)+'</b> de '+r.length+' con <b>'+MP.score+'</b> puntos.':'La partida terminó.')+'</p><div style="max-height:45vh;overflow:auto">'+rows(r,30)+'</div>'+(MP.host?'<br><button class="b" onclick="adminGate()">Administrar / nueva partida</button>':''))}
+function win(){if(!MP.run)return winSolo();
+ const elapsed=Math.max(0,(serverNow()-MP.lvT)/1000),c=gameCfg(),prior=PL.filter(p=>p.matchId==MT?.id&&p.id!=MP.id&&Number(p.solved||0)>li).length,min=Math.min(c.basePoints,c.minPoints),pts=Math.max(min,Math.floor(c.basePoints-(elapsed/60)*c.timePenaltyPerMinute-prior*c.crowdPenalty));let m='';
+ if(li==MP.solved){MP.solved++;MP.score+=pts;MP.lvT=serverNow();scheduleSave();m='+'+pts+' pts · '+Math.floor(elapsed)+' s · '+prior+' jugador(es) ya habían pasado el nivel'}hud();
+ if(MP.solved>=LV.length){ov('<h2>¡PARADOJA RESUELTA!</h2><p>Completaste los 30 niveles. Espera al final del tiempo para ver el ranking.</p>');return}
+ ov('<h2>¡Nivel completado!</h2><p>'+m+'</p><p>Cargando el siguiente nivel...</p>');
+ setTimeout(()=>{if(MP.run&&!MP.over)load(MP.solved)},1300)}
+// ===== PANEL DE ADMINISTRADOR (solo anfitrión) =====
+MP.adm=false;
+const atime=()=>{const p=phase(),n=nowServer();return p=='run'?fmt(MT.endAt-n):p=='count'?'Inicia en '+Math.ceil((MT.startAt-n)/1000)+' s':p=='over'?'00:00':fmt(gameCfg().durationSec*1000)};
+const admUp=()=>{if(MP.adm&&isAdmin()&&$('ov').style.display!='none')adm()};
+function stopMatch(){if(!isAdmin()||!MT)return;const n=serverNow();setMatch({...MT,startAt:Math.min(MT.startAt||n,n),endAt:n})}
+function adjustTime(seconds){if(!isAdmin()||phase()!='run')return;const endAt=Math.max(serverNow()+1000,MT.endAt+seconds*1000);setMatch({...MT,endAt})}
+async function kick(id,ban){if(!isAdmin())return;try{if(db)await db.ref('players/'+id).remove();else{PL=PL.filter(x=>x.id!=id);board();p2pBroadcast()}if(ban)await setMatch({...MT,ban:[...(MT.ban||[]),id]})}catch(e){MP.err='No se pudo expulsar al jugador.'}admUp()}
+function clearPl(){if(isAdmin())ranked().forEach(p=>kick(p.id,0))}
+async function hashAdmin(password,salt){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:150000,hash:'SHA-256'},key,256);return Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('')}
+function adminGate(){if(db&&(!usr||!MP.firebaseAdmin)){ov('<h2>🔐 Administración no autorizada</h2><p>El botón está disponible para iniciar sesión, pero este usuario aún no tiene rol de administrador.</p><p>UID Firebase para bootstrap seguro: <b>'+esc(usr?.uid||MP.id)+'</b></p><p>Establece <code>/admins/'+esc(usr?.uid||MP.id)+': true</code> solo desde Firebase Console o Admin SDK y vuelve a iniciar sesión.</p><button class="b" onclick="signInGoogle()">Continuar con Google</button>');return}if(!MP.host)return;MP.adm=false;const exists=!!localStorage.getItem(ADMIN_KEY);ov(`<h2>🔐 ${exists?'Acceso de administrador':'Configurar administrador'}</h2><p>${exists?'Introduce la contraseña para abrir el panel.':'Primera configuración: crea una contraseña de administrador de al menos 8 caracteres antes de compartir el juego.'}</p>${MP.err?'<p style="color:#ff5470">'+esc(MP.err)+'</p>':''}<form onsubmit="event.preventDefault();adminLogin()"><label>Contraseña<input id="adminPass" type="password" autocomplete="current-password" required></label>${exists?'':'<label>Confirmar contraseña<input id="adminPass2" type="password" autocomplete="new-password" required></label>'}<button class="b" type="submit">${exists?'Entrar':'Crear contraseña'}</button><button class="b" type="button" onclick="document.getElementById('ov').style.display='none'">Cancelar</button></form><p class="admin-note">Se guarda un hash de la contraseña en este navegador. En partidas online, los permisos del anfitrión también deben estar habilitados.</p>`)}
+async function adminLogin(){if(!MP.host)return;const pass=$('adminPass')?.value||'',old=localStorage.getItem(ADMIN_KEY);try{if(!crypto?.subtle)throw new Error('Este navegador no permite almacenar la contraseña de forma segura.');if(old){const [salt,want]=old.split(':');if(await hashAdmin(pass,salt)!==want){MP.err='Contraseña incorrecta.';adminGate();return}}else{const confirm=$('adminPass2')?.value||'';if(pass.length<8||pass!==confirm){MP.err=pass.length<8?'Usa al menos 8 caracteres.':'Las contraseñas no coinciden.';adminGate();return}const salt=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem(ADMIN_KEY,salt+':'+await hashAdmin(pass,salt))}MP.adminUnlocked=true;MP.adm=true;MP.err='';adm()}catch(e){MP.err=e.message||'No se pudo verificar la contraseña.';adminGate()}}
+function changeAdminPassword(){if(!isAdmin())return;ov(`<h2>Cambiar contraseña</h2><label>Contraseña actual<input id="oldPass" type="password" required></label><label>Nueva contraseña (mínimo 8 caracteres)<input id="newPass" type="password" required></label><label>Confirmar nueva contraseña<input id="newPass2" type="password" required></label><button class="b" onclick="saveAdminPassword()">Guardar</button><button class="b" onclick="adm()">Cancelar</button>`)}
+async function saveAdminPassword(){if(!isAdmin())return;const record=localStorage.getItem(ADMIN_KEY),[salt,want]=record.split(':'),old=$('oldPass').value,np=$('newPass').value,np2=$('newPass2').value;if(await hashAdmin(old,salt)!==want){MP.err='La contraseña actual no coincide.';changeAdminPassword();return}if(np.length<8||np!==np2){MP.err=np.length<8?'Usa al menos 8 caracteres.':'Las contraseñas nuevas no coinciden.';changeAdminPassword();return}const ns=Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');localStorage.setItem(ADMIN_KEY,ns+':'+await hashAdmin(np,ns));MP.err='Contraseña actualizada.';adm()}
+function saveSettings(){if(!isAdmin())return;const num=id=>Number($(id).value),c=gameCfg(),settings={...c,durationSec:Math.max(60,Math.min(7200,num('cfgDuration')*60)),countdownSec:Math.max(0,Math.min(120,num('cfgCountdown'))),maxPlayers:Math.max(1,Math.min(30,num('cfgPlayers'))),basePoints:Math.max(0,Math.min(100000,num('cfgBase'))),minPoints:Math.max(0,Math.min(100000,num('cfgMinimum'))),timePenaltyPerMinute:Math.max(0,Math.min(100000,num('cfgTimePenalty'))),crowdPenalty:Math.max(0,Math.min(100000,num('cfgCrowdPenalty'))),moves:{...c.moves},clones:{...c.clones}};if(settings.minPoints>settings.basePoints)settings.minPoints=settings.basePoints;for(let i=0;i<LV.length;i++){settings.moves[i]=Math.max(1,Math.min(60,num('mv'+i)));settings.clones[i]=Math.max(0,Math.min(8,num('cl'+i)))}LOCAL_CFG=settings;try{localStorage.setItem('chrono-game-config-v1',JSON.stringify(settings))}catch(e){}if(MT){const updated={...MT,settings};if(phase()=='run'&&MT.startAt)updated.endAt=MT.startAt+settings.durationSec*1000;setMatch(updated)}adm()}
+function adm(){if(!isAdmin())return;MP.adm=true;MP.lob=false;const p=phase(),r=ranked(),c=gameCfg();let h=`<h2>🛠 Panel de administración</h2><p>Estado: <b>${{none:'sin partida',lobby:'sala de espera',count:'cuenta atrás',run:'EN CURSO',over:'terminada'}[p]}</b> · Jugadores: <b>${r.length}/${c.maxPlayers}</b> · Niveles: ${LV.length}</p><div id="at" style="font-size:44px;color:#ffe600;text-align:center;text-shadow:0 0 12px #ffe600">${atime()}</div><div style="text-align:center">`;
+if(p=='none'||p=='over')h+='<button class="b" onclick="newMatch()">➕ Crear partida</button>';
+if(p=='lobby')h+='<button class="b" onclick="startMatch()">▶ Iniciar partida</button>';
+if(p=='count'||p=='run')h+='<button class="b" onclick="stopMatch()">⏹ Terminar ahora</button>';
+if(p=='run')h+='<button class="b" onclick="adjustTime(-60)">−1 min</button><button class="b" onclick="adjustTime(60)">+1 min</button>';
+	if(MT&&r.length)h+='<button class="b" onclick="clearPl()">🧹 Vaciar jugadores</button>';
+	h+='</div>'+(MP.err?'<p style="color:#ff5470">'+esc(MP.err)+'</p>':'');
+	if(MT&&p!='none'&&p!='over'&&MT.code)h+='<div style="border:1px solid #0ff;padding:12px;margin:12px 0;text-align:center"><b style="color:#0ff">Código para compartir con los jugadores</b><div style="font-size:30px;letter-spacing:5px;color:#ffe600;margin:6px">'+esc(MT.code)+'</div><span class="admin-note">Los jugadores abren “Partidas / Unirme” e ingresan este código.</span></div>';
+	h+=`<h3 style="color:#0ff">Parámetros de partida y puntuación</h3><div class="admin-grid"><label>Duración (min)<input id="cfgDuration" type="number" min="1" max="120" value="${Math.round(c.durationSec/60)}"></label><label>Cuenta atrás (seg)<input id="cfgCountdown" type="number" min="0" max="120" value="${c.countdownSec}"></label><label>Máximo jugadores (1–30)<input id="cfgPlayers" type="number" min="1" max="30" value="${c.maxPlayers}"></label><label>Puntos base por nivel<input id="cfgBase" type="number" min="0" value="${c.basePoints}"></label><label>Puntos mínimos por nivel<input id="cfgMinimum" type="number" min="0" value="${c.minPoints}"></label><label>Descuento por minuto empleado<input id="cfgTimePenalty" type="number" min="0" value="${c.timePenaltyPerMinute}"></label><label>Descuento por jugador que ya pasó<input id="cfgCrowdPenalty" type="number" min="0" value="${c.crowdPenalty}"></label></div><p class="admin-note">La puntuación baja según el tiempo usado y cuántos jugadores completaron ese nivel antes. La duración también se puede ajustar durante la partida.</p><h3 style="color:#0ff">Reglas por nivel</h3><div class="admin-levels"><table><tr><th>Nivel</th><th>Movimientos por bucle</th><th>Máx. clones</th></tr>${LV.map((l,i)=>{const q=levelRules(i);return`<tr><td>${i+1}. ${esc(l.n)}</td><td><input id="mv${i}" type="number" min="1" max="60" value="${q.m}"></td><td><input id="cl${i}" type="number" min="0" max="8" value="${q.c}"></td></tr>`}).join('')}</table></div><button class="b" onclick="saveSettings()">Guardar parámetros</button><button class="b" onclick="changeAdminPassword()">Cambiar contraseña</button>`;
+h+='<div style="max-height:30vh;overflow:auto;margin-top:12px"><table width="100%"><tr><td>#</td><td>Jugador</td><td>Nivel</td><td>Puntos</td><td></td></tr>'+r.map((q,i)=>'<tr><td>'+(i+1)+'</td><td>'+esc(q.name)+'</td><td>'+q.solved+'</td><td>'+q.score+'</td><td><button class="b" onclick="kick(\''+esc(q.id)+'\',1)">Expulsar</button></td></tr>').join('')+'</table></div><br><button class="b" onclick="MP.adm=false;document.getElementById(\'ov\').style.display=\'none\'">Cerrar panel</button>';
+ov(h)}
+netInit();setInterval(tick,250);
+load(0);help();requestAnimationFrame(draw);
+</script></body></html>

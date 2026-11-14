@@ -1,0 +1,33 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "admins": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "match": {
+      ".read": "auth != null",
+      ".write": "auth != null && root.child('admins').child(auth.uid).val() == true",
+      "state": {
+        ".validate": "newData.hasChildren(['id','settings','code']) && newData.child('id').isString() && newData.child('code').isString() && newData.child('code').val().length == 6 && newData.child('settings').hasChildren(['durationSec','countdownSec','maxPlayers']) && newData.child('settings').child('durationSec').isNumber() && newData.child('settings').child('durationSec').val() >= 60 && newData.child('settings').child('durationSec').val() <= 7200 && newData.child('settings').child('maxPlayers').isNumber() && newData.child('settings').child('maxPlayers').val() >= 1 && newData.child('settings').child('maxPlayers').val() <= 30"
+      }
+    },
+    "players": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && (root.child('admins').child(auth.uid).val() == true || (auth.uid == $uid && newData.exists() && newData.child('matchId').val() == root.child('match/state/id').val()))",
+        ".validate": "newData.hasChildren(['name','matchId','solved','score','t'])",
+        "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 16" },
+        "matchId": { ".validate": "newData.isString() && newData.val().length <= 64" },
+        "solved": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 30 && newData.val() % 1 == 0" },
+        "score": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000000 && newData.val() % 1 == 0" },
+        "t": { ".validate": "newData.isNumber()" },
+        "progress": { ".validate": "newData.isString() && newData.val().length <= 50000" },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}
