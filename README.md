@@ -14,7 +14,7 @@ Está habilitado el acceso anónimo y Google Authentication, y el dominio de Git
 
 1. Entra con Google **antes de jugar** para recuperar el mismo UID y progreso si continúas desde otro computador.
 2. En **Partidas / Unirme**, escribe un apodo y el código que comparte el administrador. Todos los jugadores deben entrar en la misma partida; el reloj sincronizado es el del servidor y continúa aunque cierres el juego.
-3. Para administrar, usa la misma cuenta Google autorizada y luego la contraseña local del panel. Si el navegador bloquea la ventana emergente de Google, el inicio continúa en la misma pestaña; al volver desde el acceso iniciado en **Panel Admin**, aparece directamente el campo de contraseña. La contraseña local no reemplaza el rol de administrador de Firebase. Al crear una partida, comparte el código y pulsa **Iniciar** desde el panel.
+3. Para administrar, abre **Panel de administración** en la pantalla principal o en la ayuda inicial; usa la cuenta Google autorizada y luego la contraseña local del panel. El inicio con ventana emergente abre el campo de contraseña directamente; si el navegador bloquea la ventana emergente, el retorno por redirección también vuelve a ese acceso. La contraseña local no reemplaza el rol de administrador de Firebase. Al crear una partida, comparte el código y pulsa **Iniciar** desde el panel.
 4. Un invitado anónimo solo tiene identidad en ese navegador. Vincularlo a una cuenta Google nueva para Firebase conserva su UID; si la cuenta Google ya tenía un historial, se recupera ese historial sin fusionar ambos automáticamente.
 
 La práctica local no implica guardado en la nube.

@@ -97,6 +97,10 @@ assert.deepEqual(plain('recs'), []);
   await run('join()');
   assert.match(run('MP.err'), /Firebase no está conectado/);
 
+  run('firebaseReady=false; MP.host=false; adminGate()');
+  assert.match(node('ov').innerHTML, /Conectando con Firebase/, 'early admin click shows a clear loading state');
+  run('firebaseReady=true;');
+
   const adminPassword = process.env.CHRONO_ADMIN_TEST_PASSWORD || 'local-test-password';
   const salt = 'auth-flow-test-salt';
   values.set('chrono-admin-credential-v1', salt + ':' + await run(`hashAdmin(${JSON.stringify(adminPassword)}, ${JSON.stringify(salt)})`));
@@ -133,6 +137,32 @@ assert.deepEqual(plain('recs'), []);
   };
   await run('signInGoogle()');
   assert.deepEqual(authCalls, ['signInWithPopup', 'signInWithRedirect'], 'blocked Google sign-in popup falls back to redirect');
+
+  const googleAdmin = {uid: 'admin-test', displayName: 'Joan', email: 'joan@example.com'};
+  authCalls.length = 0;
+  authMock = {
+    currentUser: {isAnonymous: true, linkWithPopup: async () => {authCalls.push('linkWithPopup'); authMock.currentUser = googleAdmin; return {user: googleAdmin};}},
+    signInWithPopup: async () => {authCalls.push('signInWithPopup'); authMock.currentUser = googleAdmin; return {user: googleAdmin};}
+  };
+  context.mockDb = {ref: path => ({once: async () => ({val: () => path === 'admins/admin-test' ? true : null})})};
+  run('db=mockDb; MP.host=false; MP.firebaseAdmin=false; MP.adminUnlocked=false; usr=null; MP.err=""');
+  await run('signInGoogle(true)');
+  assert.deepEqual(authCalls, ['linkWithPopup'], 'admin sign-in links the current anonymous session when possible');
+  assert.equal(run('MP.firebaseAdmin'), true, 'admin sign-in refreshes the Firebase role immediately');
+  assert.equal(run('MP.host'), true);
+  assert.match(node('ov').innerHTML, /Acceso de administrador/, 'successful Google sign-in advances directly to the local password gate');
+  assert.equal(reloads, 0, 'admin popup flow does not interrupt the return to the password gate');
+
+  authMock = {
+    currentUser: {isAnonymous: false},
+    signInWithPopup: async () => {authMock.currentUser = {uid: 'other-user', email: 'other@example.com'}; return {user: authMock.currentUser};}
+  };
+  context.mockDb = {ref: path => ({once: async () => ({val: () => path === 'admins/other-user' ? false : null})})};
+  run('MP.host=false; MP.firebaseAdmin=false; MP.adminUnlocked=false; usr=null');
+  await run('signInGoogle(true)');
+  assert.match(node('ov').innerHTML, /other@example\.com/, 'unprivileged Google accounts receive a clear account/role message');
+  assert.match(node('ov').innerHTML, /Cambiar cuenta Google/, 'unprivileged account can switch Google accounts without bypassing authorization');
+  assert.doesNotMatch(node('ov').innerHTML, /Acceso de administrador/, 'a Google account without the Firebase admin role never reaches the password gate');
 
   console.log('behavior tests: OK');
 })().catch(error => {console.error(error); process.exitCode = 1;});
